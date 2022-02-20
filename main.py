@@ -14,7 +14,7 @@ def run():
 
     generate_data(config["model"]["num_features"], config["model"]["num_values"])
 
-    datamodule = SignalingGameDataModule(DATA_PATH, batch_size=config["data"]["batch_size"])
+    datamodule = SignalingGameDataModule(DATA_PATH, num_distractors=config["data"]["num_distractors"], batch_size=config["data"]["batch_size"])
 
     # for batch in train_loader:
     #     sender_input, receiver_input, labels = batch

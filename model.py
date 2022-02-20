@@ -240,22 +240,13 @@ class SignalingGameModule(pl.LightningModule):
 
         return optimized_loss, acc
 
-    def validation_step(self, batch, batch_idx, dataloader_idx):
-        if dataloader_idx == 0:
-            # Normal validation case
-            loss, acc = self.forward(batch)
-            return loss, acc
-        elif dataloader_idx == 1:
-            # Language analysis
-            messages, log_prob_s, entropy_s = self.sender(batch)
-            return batch, messages
+    def validation_step(self, batch, batch_idx):
+        # Language analysis
+        messages, log_prob_s, entropy_s = self.sender(batch)
+        return batch, messages
 
     def validation_epoch_end(self, validation_step_outputs):
-        val_results, lang_analysis_results = validation_step_outputs
-        mean_loss = np.mean([loss for loss, acc in val_results])
-        mean_acc = np.mean([acc for loss, acc in val_results])
-        self.log("val_loss", float(mean_loss), prog_bar=False, logger=True)
-        self.log("val_acc", float(mean_acc), prog_bar=True, logger=True)
+        lang_analysis_results = validation_step_outputs
 
         # Language analysis
         self.analyze_language(lang_analysis_results)
@@ -274,6 +265,7 @@ class SignalingGameModule(pl.LightningModule):
         num_unique_messages = len(messages_strings.unique())
         self.log("num_unique_messages", num_unique_messages, prog_bar=True, logger=True)
 
-        topsim = compute_topsim(meanings, messages)
-        self.log("topsim", topsim, prog_bar=True, logger=True)
-        print("Topsim: ", topsim)
+        if self.model_hparams.log_topsim_on_validation:
+            topsim = compute_topsim(meanings, messages)
+            self.log("topsim", topsim, prog_bar=True, logger=True)
+            print("Topsim: ", topsim)

@@ -3,31 +3,27 @@ import random
 from typing import Optional
 
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, IterableDataset
 import pandas as pd
 import numpy as np
 import pytorch_lightning as pl
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, data_path: str, batch_size: int):
+    def __init__(self, data_path: str, num_distractors: int, batch_size: int):
         super().__init__()
         self.data_path = data_path
         self.batch_size = batch_size
 
-        dataset = SignalingGameDiscriminationDataset(self.data_path)
-        self.train_dataset, self.val_dataset = random_split(dataset,
-                                                            [round(len(dataset) * 0.99), round(len(dataset) * 0.01)])
-
+        self.train_dataset = SignalingGameDiscriminationDataset(self.data_path, num_distractors)
         self.lang_analysis_dataset = SignalingGameDataset(self.data_path)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size)
 
     def val_dataloader(self):
-        val_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size)
         language_analysis_dataloader = DataLoader(self.lang_analysis_dataset, batch_size=self.batch_size)
-        return val_dataloader, language_analysis_dataloader
+        return language_analysis_dataloader
 
 
 class SignalingGameDataset(Dataset):
@@ -42,23 +38,26 @@ class SignalingGameDataset(Dataset):
         return sample.astype(np.float32)
 
 
-class SignalingGameDiscriminationDataset(Dataset):
-    def __init__(self, data_path):
+class SignalingGameDiscriminationDataset(IterableDataset):
+    def __init__(self, data_path, num_distractors):
         self.dataset = SignalingGameDataset(data_path)
+        self.num_distractors = num_distractors
 
-        self.data = list(itertools.permutations(self.dataset, 2))
+    def get_sample(self):
+        target_position = random.choice(range(self.num_distractors))
 
-    def __len__(self):
-        return len(self.data) * 2
+        receiver_input = []
+        for d in range(self.num_distractors):
+            distractor = self.dataset[random.choice(range(len(self.dataset)))]
+            receiver_input.append(distractor)
 
-    def __getitem__(self, idx):
-        data_idx = idx % len(self.data)
-        target_position = 0 if idx < len(self.data) else 1
-
-        receiver_input = self.data[data_idx]
         receiver_input = torch.tensor(np.array(receiver_input))
 
         label = target_position
         sender_input = receiver_input[label]
 
         return sender_input, receiver_input, label
+
+    def __iter__(self):
+        while(1):
+            yield self.get_sample()
