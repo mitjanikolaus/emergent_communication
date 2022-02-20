@@ -1,6 +1,4 @@
-import itertools
 import random
-from typing import Optional
 
 import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
@@ -61,5 +59,5 @@ class SignalingGameDiscriminationDataset(IterableDataset):
         return sender_input, receiver_input, label
 
     def __iter__(self):
-        while(1):
+        while 1:
             yield self.get_sample()
