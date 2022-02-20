@@ -1,10 +1,9 @@
 from argparse import Namespace
 
 import yaml
-from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 
-from data import SignalingGameDiscriminationDataset
+from data import SignalingGameDataModule
 from generate_data import DATA_PATH, generate_data
 from model import SignalingGameModule
 
@@ -15,8 +14,7 @@ def run():
 
     generate_data(config["model"]["num_features"], config["model"]["num_values"])
 
-    dataset = SignalingGameDiscriminationDataset(DATA_PATH)
-    train_loader = DataLoader(dataset, batch_size=config["data"]["batch_size"], shuffle=True)
+    datamodule = SignalingGameDataModule(DATA_PATH, batch_size=config["data"]["batch_size"])
 
     # for batch in train_loader:
     #     sender_input, receiver_input, labels = batch
@@ -26,9 +24,10 @@ def run():
 
     model = SignalingGameModule(**config)
 
-    trainer = pl.Trainer.from_argparse_args(Namespace(**config["trainer"]))
+    trainer_args = config["trainer"]
+    trainer = pl.Trainer.from_argparse_args(Namespace(**trainer_args))
 
-    trainer.fit(model, train_loader)
+    trainer.fit(model, datamodule)
 
 
 if __name__ == '__main__':

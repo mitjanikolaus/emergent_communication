@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+import numpy as np
 import torch
 from pytorch_lightning.utilities import AttributeDict
 from torch import nn
@@ -165,11 +166,10 @@ class SignalingGameModule(pl.LightningModule):
             raise ValueError("Unknown baseline type: ", self.model_hparams.baseline_type)
 
     def training_step(self, batch, batch_idx):
-        loss, interactions = self.forward(batch)
+        loss, interactions, acc = self.forward(batch)
         return loss
 
     def configure_optimizers(self):
-        # TODO separate optimizers for sender and receiver?
         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
         return optimizer
 
@@ -184,15 +184,12 @@ class SignalingGameModule(pl.LightningModule):
         )
 
         acc = (receiver_output.argmax(dim=1) == labels).detach().float().mean()
-        self.log("accuracy", acc, on_step=True, prog_bar=True, logger=True)
+        self.log("train_acc", acc, prog_bar=True, logger=True)
 
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
         assert len(receiver_loss) == batch_size
-        # loss, aux_info = loss(
-        #     sender_input, message, receiver_input, receiver_output, labels
-        # )
-        self.log("cross_entropy_loss", receiver_loss.mean(), on_step=True, prog_bar=True, logger=True)
+        self.log("receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True)
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
         effective_entropy_s = torch.zeros(batch_size)
@@ -210,7 +207,7 @@ class SignalingGameModule(pl.LightningModule):
         weighted_entropy = (
             effective_entropy_s.mean() * self.sender_entropy_coeff
         )
-        self.log("weighted_entropy", weighted_entropy, on_step=True, prog_bar=True, logger=True)
+        self.log("weighted_entropy", weighted_entropy, prog_bar=True, logger=True)
 
         log_prob = effective_log_prob_s
 
@@ -225,9 +222,9 @@ class SignalingGameModule(pl.LightningModule):
             (receiver_loss.detach() - loss_baseline) * log_prob
         ).mean()
 
-        self.log("policy_length_loss", policy_length_loss, on_step=True, prog_bar=True, logger=True)
-        self.log("loss_baseline", loss_baseline, on_step=True, prog_bar=True, logger=True)
-        self.log("policy_loss", policy_loss, on_step=True, prog_bar=True, logger=True)
+        self.log("policy_length_loss", policy_length_loss, prog_bar=False, logger=True)
+        self.log("loss_baseline", loss_baseline, prog_bar=True, logger=True)
+        self.log("policy_loss", policy_loss, prog_bar=True, logger=True)
 
         optimized_loss = policy_length_loss + policy_loss - weighted_entropy
 
@@ -249,19 +246,14 @@ class SignalingGameModule(pl.LightningModule):
             length=message_length.float()
         )
 
-        return optimized_loss, interactions
+        return optimized_loss, interactions, acc
 
-    # def optimizer_step(
-    #         self,
-    #         epoch,
-    #         batch_idx,
-    #         optimizer,
-    #         optimizer_idx,
-    #         optimizer_closure,
-    #         on_tpu=False,
-    #         using_native_amp=False,
-    #         using_lbfgs=False,
-    # ):
-    #     # TODO separate optimizers for sender and receiver?
-    #     # update generator every step
-    #     optimizer.step(closure=optimizer_closure)
+    def validation_step(self, batch, batch_idx):
+        loss, interactions, acc = self.forward(batch)
+        return loss, interactions, acc
+
+    def validation_epoch_end(self, validation_step_outputs):
+        mean_loss = np.mean([loss for loss, interactions, acc in validation_step_outputs])
+        mean_acc = np.mean([acc for loss, interactions, acc in validation_step_outputs])
+        self.log("val_loss", float(mean_loss), prog_bar=False, logger=True)
+        self.log("val_acc", float(mean_acc), prog_bar=True, logger=True)
