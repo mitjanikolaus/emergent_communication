@@ -18,12 +18,6 @@ def run():
                                          batch_size=config["data"]["batch_size"],
                                          num_workers=config["data"]["num_workers"])
 
-    # for batch in train_loader:
-    #     sender_input, receiver_input, labels = batch
-    #     print(sender_input)
-    #     print(receiver_input)
-    #     print(labels)
-
     model = SignalingGameModule(**config)
 
     trainer_args = config["trainer"]
