@@ -3,26 +3,28 @@ import random
 from typing import Optional
 
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split, IterableDataset
+from torch.utils.data import Dataset, DataLoader, IterableDataset
 import pandas as pd
 import numpy as np
 import pytorch_lightning as pl
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, data_path: str, num_distractors: int, batch_size: int):
+    def __init__(self, data_path: str, num_distractors: int, batch_size: int, num_workers: int):
         super().__init__()
         self.data_path = data_path
         self.batch_size = batch_size
+        self.num_workers = num_workers
 
         self.train_dataset = SignalingGameDiscriminationDataset(self.data_path, num_distractors)
         self.lang_analysis_dataset = SignalingGameDataset(self.data_path)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        language_analysis_dataloader = DataLoader(self.lang_analysis_dataset, batch_size=self.batch_size)
+        language_analysis_dataloader = DataLoader(self.lang_analysis_dataset, batch_size=self.batch_size,
+                                                  num_workers=self.num_workers)
         return language_analysis_dataloader
 
 

@@ -263,7 +263,7 @@ class SignalingGameModule(pl.LightningModule):
         messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
         num_unique_messages = len(messages_strings.unique())
-        self.log("num_unique_messages", num_unique_messages, prog_bar=True, logger=True)
+        self.log("num_unique_messages", float(num_unique_messages), prog_bar=True, logger=True)
 
         if self.model_hparams.log_topsim_on_validation:
             topsim = compute_topsim(meanings, messages)
