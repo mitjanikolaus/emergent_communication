@@ -15,15 +15,19 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.data_path = data_path
         self.batch_size = batch_size
 
-    def setup(self, stage: Optional[str] = None):
         dataset = SignalingGameDiscriminationDataset(self.data_path)
-        self.train_dataset, self.val_dataset = random_split(dataset, [round(len(dataset)*0.9), round(len(dataset)*0.1)])
+        self.train_dataset, self.val_dataset = random_split(dataset,
+                                                            [round(len(dataset) * 0.99), round(len(dataset) * 0.01)])
+
+        self.lang_analysis_dataset = SignalingGameDataset(self.data_path)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
 
     def val_dataloader(self):
-        return DataLoader(self.val_dataset, batch_size=self.batch_size)
+        val_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size)
+        language_analysis_dataloader = DataLoader(self.lang_analysis_dataset, batch_size=self.batch_size)
+        return val_dataloader, language_analysis_dataloader
 
 
 class SignalingGameDataset(Dataset):
@@ -49,10 +53,11 @@ class SignalingGameDiscriminationDataset(Dataset):
 
     def __getitem__(self, idx):
         data_idx = idx % len(self.data)
+        target_position = 0 if idx < len(self.data) else 1
+
         receiver_input = self.data[data_idx]
         receiver_input = torch.tensor(np.array(receiver_input))
 
-        target_position = idx % 2
         label = target_position
         sender_input = receiver_input[label]
 

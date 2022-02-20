@@ -3,7 +3,7 @@ from argparse import Namespace
 import yaml
 import pytorch_lightning as pl
 
-from data import SignalingGameDataModule
+from data import SignalingGameDataModule, SignalingGameDataset
 from generate_data import DATA_PATH, generate_data
 from model import SignalingGameModule
 
@@ -27,6 +27,10 @@ def run():
     trainer_args = config["trainer"]
     trainer = pl.Trainer.from_argparse_args(Namespace(**trainer_args))
 
+    # Initial validation
+    trainer.validate(model, datamodule=datamodule, verbose=False)
+
+    # Training
     trainer.fit(model, datamodule)
 
 

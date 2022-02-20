@@ -8,6 +8,9 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 import pytorch_lightning as pl
 
+import pandas as pd
+
+from language_analysis import compute_topsim
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
@@ -166,7 +169,7 @@ class SignalingGameModule(pl.LightningModule):
             raise ValueError("Unknown baseline type: ", self.model_hparams.baseline_type)
 
     def training_step(self, batch, batch_idx):
-        loss, interactions, acc = self.forward(batch)
+        loss, acc = self.forward(batch)
         return loss
 
     def configure_optimizers(self):
@@ -178,18 +181,18 @@ class SignalingGameModule(pl.LightningModule):
     ):
         sender_input, receiver_input, labels = batch
         message, log_prob_s, entropy_s = self.sender(sender_input)
-        message_length = find_lengths(message)
+        message_lengths = find_lengths(message)
         receiver_output = self.receiver(
-            message, receiver_input, message_length
+            message, receiver_input, message_lengths
         )
 
         acc = (receiver_output.argmax(dim=1) == labels).detach().float().mean()
-        self.log("train_acc", acc, prog_bar=True, logger=True)
+        self.log("train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
         assert len(receiver_loss) == batch_size
-        self.log("receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True)
+        self.log("receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
         effective_entropy_s = torch.zeros(batch_size)
@@ -199,19 +202,19 @@ class SignalingGameModule(pl.LightningModule):
         effective_log_prob_s = torch.zeros(batch_size)
 
         for i in range(message.size(1)):
-            not_eosed = (i < message_length).float()
+            not_eosed = (i < message_lengths).float()
             effective_entropy_s += entropy_s[:, i] * not_eosed
             effective_log_prob_s += log_prob_s[:, i] * not_eosed
-        effective_entropy_s = effective_entropy_s / message_length.float()
+        effective_entropy_s = effective_entropy_s / message_lengths.float()
 
         weighted_entropy = (
             effective_entropy_s.mean() * self.sender_entropy_coeff
         )
-        self.log("weighted_entropy", weighted_entropy, prog_bar=True, logger=True)
+        self.log("weighted_entropy", weighted_entropy, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         log_prob = effective_log_prob_s
 
-        length_loss = message_length.float() * self.length_cost
+        length_loss = message_lengths.float() * self.length_cost
 
         policy_length_loss = (
             (length_loss - self.baselines["length"].predict(length_loss))
@@ -222,9 +225,9 @@ class SignalingGameModule(pl.LightningModule):
             (receiver_loss.detach() - loss_baseline) * log_prob
         ).mean()
 
-        self.log("policy_length_loss", policy_length_loss, prog_bar=False, logger=True)
-        self.log("loss_baseline", loss_baseline, prog_bar=True, logger=True)
-        self.log("policy_loss", policy_loss, prog_bar=True, logger=True)
+        self.log("policy_length_loss", policy_length_loss, prog_bar=False, logger=True, add_dataloader_idx=False)
+        self.log("loss_baseline", loss_baseline, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log("policy_loss", policy_loss, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         optimized_loss = policy_length_loss + policy_loss - weighted_entropy
 
@@ -235,25 +238,42 @@ class SignalingGameModule(pl.LightningModule):
             self.baselines["loss"].update(receiver_loss)
             self.baselines["length"].update(length_loss)
 
-        interactions = dict(
-            sender_input=sender_input,
-            labels=labels,
-            receiver_input=receiver_input,
-            message=message.detach(),
-            receiver_output=receiver_output.detach(),
-            message_length=message_length,
-            sender_entropy=entropy_s.detach(),
-            length=message_length.float()
-        )
+        return optimized_loss, acc
 
-        return optimized_loss, interactions, acc
-
-    def validation_step(self, batch, batch_idx):
-        loss, interactions, acc = self.forward(batch)
-        return loss, interactions, acc
+    def validation_step(self, batch, batch_idx, dataloader_idx):
+        if dataloader_idx == 0:
+            # Normal validation case
+            loss, acc = self.forward(batch)
+            return loss, acc
+        elif dataloader_idx == 1:
+            # Language analysis
+            messages, log_prob_s, entropy_s = self.sender(batch)
+            return batch, messages
 
     def validation_epoch_end(self, validation_step_outputs):
-        mean_loss = np.mean([loss for loss, interactions, acc in validation_step_outputs])
-        mean_acc = np.mean([acc for loss, interactions, acc in validation_step_outputs])
+        val_results, lang_analysis_results = validation_step_outputs
+        mean_loss = np.mean([loss for loss, acc in val_results])
+        mean_acc = np.mean([acc for loss, acc in val_results])
         self.log("val_loss", float(mean_loss), prog_bar=False, logger=True)
         self.log("val_acc", float(mean_acc), prog_bar=True, logger=True)
+
+        # Language analysis
+        self.analyze_language(lang_analysis_results)
+
+    def analyze_language(self, lang_analysis_results):
+        meanings = torch.cat([meaning for meaning, message in lang_analysis_results])
+        messages = torch.cat([message for meaning, message in lang_analysis_results])
+
+        meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+        messages_strings = pd.DataFrame(messages).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+
+        messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
+        messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
+        messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
+
+        num_unique_messages = len(messages_strings.unique())
+        self.log("num_unique_messages", num_unique_messages, prog_bar=True, logger=True)
+
+        topsim = compute_topsim(meanings, messages)
+        self.log("topsim", topsim, prog_bar=True, logger=True)
+        print("Topsim: ", topsim)
