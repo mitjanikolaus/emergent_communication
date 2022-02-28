@@ -1,7 +1,25 @@
+from collections import defaultdict
+
 import editdistance
 import torch
 from scipy.spatial import distance
 from scipy.stats import spearmanr
+import numpy as np
+
+
+def compute_entropy(messages):
+    freq_table = defaultdict(float)
+
+    for m in messages:
+        m = tuple(m.tolist())
+        freq_table[m] += 1.0
+
+    t = torch.tensor([v for v in freq_table.values()]).float()
+    if (t < 0.0).any():
+        raise RuntimeError("Encountered negative probabilities")
+
+    t /= t.sum()
+    return (torch.where(t > 0, t.log(), t) * t).sum().item() / np.log(2)
 
 
 def compute_topsim(

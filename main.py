@@ -4,7 +4,6 @@ import yaml
 import pytorch_lightning as pl
 
 from data import SignalingGameDataModule, SignalingGameDataset
-from generate_data import DATA_PATH, generate_data
 from model import SignalingGameModule
 
 
@@ -12,9 +11,10 @@ def run():
     with open("hparams.yaml") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
 
-    generate_data(config["model"]["num_features"], config["model"]["num_values"])
+    # generate_data(config["model"]["num_features"], config["model"]["num_values"])
 
-    datamodule = SignalingGameDataModule(DATA_PATH, num_distractors=config["data"]["num_distractors"],
+    datamodule = SignalingGameDataModule(num_features=config["model"]["num_features"],
+                                        num_values=config["model"]["num_values"], num_distractors=config["data"]["num_distractors"],
                                          batch_size=config["data"]["batch_size"],
                                          num_workers=config["data"]["num_workers"])
 

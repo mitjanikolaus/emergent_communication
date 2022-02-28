@@ -10,13 +10,13 @@ import pytorch_lightning as pl
 
 import pandas as pd
 
-from language_analysis import compute_topsim
+from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, n_features, num_layers=1
+            self, vocab_size, embed_dim, hidden_size, n_features, n_values, num_layers=1
     ):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
@@ -28,7 +28,7 @@ class Receiver(nn.Module):
             num_layers=num_layers,
         )
 
-        self.fc1 = nn.Linear(n_features, hidden_size)
+        self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
     def forward(self, message, input=None, lengths=None):
         # print("\n\nMessage: ", message)
@@ -56,6 +56,7 @@ class Sender(nn.Module):
     def __init__(
         self,
         n_features,
+        n_values,
         vocab_size,
         embed_dim,
         hidden_size,
@@ -73,11 +74,10 @@ class Sender(nn.Module):
         super(Sender, self).__init__()
         self.max_len = max_len
 
-        self.embed_input = nn.Linear(n_features, hidden_size)
+        self.embed_input = nn.Linear(n_features*n_values, embed_dim)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
         self.hidden_size = hidden_size
         self.embed_dim = embed_dim
@@ -92,25 +92,17 @@ class Sender(nn.Module):
                 for i in range(self.num_layers)
             ]
         )
-        #TODO: layernorm?
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        nn.init.normal_(self.sos_embedding, 0.0, 0.01)
 
     def forward(self, x):
-        prev_hidden = [self.embed_input(x)]
-        prev_hidden.extend(
-            [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
-        )
         batch_size = x.shape[0]
 
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size)) for _ in range(self.num_layers)]
+
         prev_c = [
-            torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers)
+            torch.zeros((batch_size, self.hidden_size)) for _ in range(self.num_layers)
         ]
 
-        input = torch.stack([self.sos_embedding] * batch_size)
+        input = self.embed_input(x)
 
         sequence = []
         logits = []
@@ -155,8 +147,8 @@ class SignalingGameModule(pl.LightningModule):
         self.save_hyperparameters()
         self.model_hparams = AttributeDict(self.hparams["model"])
 
-        self.sender = Sender(self.model_hparams.num_features, self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim, self.model_hparams.sender_hidden_dim, self.model_hparams.max_len, self.model_hparams.sender_num_layers)
-        self.receiver = Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim, self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features, self.model_hparams.receiver_num_layers)
+        self.sender = Sender(self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim, self.model_hparams.sender_hidden_dim, self.model_hparams.max_len, self.model_hparams.sender_num_layers)
+        self.receiver = Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim, self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.receiver_num_layers)
 
         self.sender_entropy_coeff = self.model_hparams.sender_entropy_coeff
         self.length_cost = self.model_hparams.length_cost
@@ -168,13 +160,19 @@ class SignalingGameModule(pl.LightningModule):
         else:
             raise ValueError("Unknown baseline type: ", self.model_hparams.baseline_type)
 
-    def training_step(self, batch, batch_idx):
-        loss, acc = self.forward(batch)
-        return loss
+        self.automatic_optimization = False
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-        return optimizer
+    def training_step(self, batch, batch_idx):
+        opt1, opt2 = self.optimizers()
+        opt1.zero_grad()
+        opt2.zero_grad()
+        loss, acc = self.forward(batch)
+        self.manual_backward(loss)
+        opt1.step()
+
+        perform_receiver_update = batch_idx % self.model_hparams.receiver_update_interval == 0
+        if perform_receiver_update:
+            opt2.step()
 
     def forward(
         self, batch,
@@ -240,13 +238,29 @@ class SignalingGameModule(pl.LightningModule):
 
         return optimized_loss, acc
 
-    def validation_step(self, batch, batch_idx):
-        # Language analysis
-        messages, log_prob_s, entropy_s = self.sender(batch)
-        return batch, messages
+    def configure_optimizers(self):
+        optimizer_sender = torch.optim.Adam(self.sender.parameters(), lr=1e-3)
+        optimizer_receiver = torch.optim.Adam(self.receiver.parameters(), lr=1e-3)
+
+        return optimizer_sender, optimizer_receiver
+
+    def validation_step(self, batch, batch_idx, dataloader_idx):
+        if dataloader_idx == 0:
+            # Generalization:
+            loss, acc = self.forward(batch)
+            return acc
+        else:
+            # Language analysis
+            messages, log_prob_s, entropy_s = self.sender(batch)
+            return batch, messages
 
     def validation_epoch_end(self, validation_step_outputs):
-        lang_analysis_results = validation_step_outputs
+        generalization_results, lang_analysis_results = validation_step_outputs
+
+        # Generalization:
+        test_acc = np.mean(generalization_results).item()
+        self.log("test_acc", test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
+        print("test_acc: ", test_acc)
 
         # Language analysis
         self.analyze_language(lang_analysis_results)
@@ -264,6 +278,12 @@ class SignalingGameModule(pl.LightningModule):
 
         num_unique_messages = len(messages_strings.unique())
         self.log("num_unique_messages", float(num_unique_messages), prog_bar=True, logger=True)
+        print("num_unique_messages: ", num_unique_messages)
+
+        if self.model_hparams.log_entropy_on_validation:
+            entropy = compute_entropy(messages)
+            self.log("message_entropy", entropy, prog_bar=True, logger=True)
+            print("message_entropy: ", entropy)
 
         if self.model_hparams.log_topsim_on_validation:
             topsim = compute_topsim(meanings, messages)
