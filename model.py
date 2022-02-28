@@ -160,19 +160,34 @@ class SignalingGameModule(pl.LightningModule):
         else:
             raise ValueError("Unknown baseline type: ", self.model_hparams.baseline_type)
 
+        if not 0 < self.model_hparams.sender_learning_speed <= 1:
+            raise ValueError("Sender learning speed should be between 0 and 1 ", self.model_hparams.sender_learning_speed)
+
+        if not 0 < self.model_hparams.receiver_learning_speed <= 1:
+            raise ValueError("Receiver learning speed should be between 0 and 1 ", self.model_hparams.receiver_learning_speed)
+
         self.automatic_optimization = False
 
+    def configure_optimizers(self):
+        optimizer_sender = torch.optim.Adam(self.sender.parameters(), lr=1e-3)
+        optimizer_receiver = torch.optim.Adam(self.receiver.parameters(), lr=1e-3)
+
+        return optimizer_sender, optimizer_receiver
+
     def training_step(self, batch, batch_idx):
-        opt1, opt2 = self.optimizers()
-        opt1.zero_grad()
-        opt2.zero_grad()
+        opt_sender, opt_receiver = self.optimizers()
+        opt_sender.zero_grad()
+        opt_receiver.zero_grad()
         loss, acc = self.forward(batch)
         self.manual_backward(loss)
-        opt1.step()
 
-        perform_receiver_update = batch_idx % self.model_hparams.receiver_update_interval == 0
+        perform_sender_update = torch.rand(1) < self.model_hparams.sender_learning_speed
+        if perform_sender_update:
+            opt_sender.step()
+
+        perform_receiver_update = torch.rand(1) < self.model_hparams.receiver_learning_speed
         if perform_receiver_update:
-            opt2.step()
+            opt_receiver.step()
 
     def forward(
         self, batch,
@@ -237,12 +252,6 @@ class SignalingGameModule(pl.LightningModule):
             self.baselines["length"].update(length_loss)
 
         return optimized_loss, acc
-
-    def configure_optimizers(self):
-        optimizer_sender = torch.optim.Adam(self.sender.parameters(), lr=1e-3)
-        optimizer_receiver = torch.optim.Adam(self.receiver.parameters(), lr=1e-3)
-
-        return optimizer_sender, optimizer_receiver
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
         if dataloader_idx == 0:

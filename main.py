@@ -11,8 +11,6 @@ def run():
     with open("hparams.yaml") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
 
-    # generate_data(config["model"]["num_features"], config["model"]["num_values"])
-
     datamodule = SignalingGameDataModule(num_features=config["model"]["num_features"],
                                         num_values=config["model"]["num_values"], num_distractors=config["data"]["num_distractors"],
                                          batch_size=config["data"]["batch_size"],
