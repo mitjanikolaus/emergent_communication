@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, num_features, num_values, num_distractors, batch_size, num_workers):
+    def __init__(self, num_features, num_values, num_distractors, test_set_size, batch_size, num_workers):
         super().__init__()
         self.num_features = num_features
         self.num_values = num_values
@@ -15,7 +15,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
 
         dataset = SignalingGameDataset(num_features, num_values)
-        self.data_train, self.data_test = torch.utils.data.random_split(dataset, [round(len(dataset)*0.8), round(len(dataset)*0.2)])
+        self.data_train, self.data_test = torch.utils.data.random_split(dataset, [round(len(dataset)*(1-test_set_size)), round(len(dataset)*test_set_size)])
         print("Num meanings in train: ", len(self.data_train))
         print("Num meanings in test: ", len(self.data_test))
 

@@ -25,4 +25,5 @@ trainer:
 data:
   batch_size: 64
   num_distractors: 4
+  test_set_size: 0.2
   num_workers: 0
