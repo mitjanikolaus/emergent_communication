@@ -1,3 +1,5 @@
+import itertools
+import random
 from collections import defaultdict
 
 import numpy as np
@@ -148,8 +150,15 @@ class SignalingGameModule(pl.LightningModule):
         self.save_hyperparameters()
         self.model_hparams = AttributeDict(self.hparams["model"])
 
-        self.sender = Sender(self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim, self.model_hparams.sender_hidden_dim, self.model_hparams.max_len, self.model_hparams.sender_num_layers)
-        self.receiver = Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim, self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.receiver_num_layers)
+        self.senders = []
+        for _ in range(self.model_hparams.num_senders):
+            sender = Sender(self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim, self.model_hparams.sender_hidden_dim, self.model_hparams.max_len, self.model_hparams.sender_num_layers)
+            self.senders.append(sender)
+
+        self.receivers = []
+        for _ in range(self.model_hparams.num_receivers):
+            receiver = Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim, self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.receiver_num_layers)
+            self.receivers.append(receiver)
 
         self.sender_entropy_coeff = self.model_hparams.sender_entropy_coeff
         self.length_cost = self.model_hparams.length_cost
@@ -170,16 +179,26 @@ class SignalingGameModule(pl.LightningModule):
         self.automatic_optimization = False
 
     def configure_optimizers(self):
-        optimizer_sender = torch.optim.Adam(self.sender.parameters(), lr=1e-3)
-        optimizer_receiver = torch.optim.Adam(self.receiver.parameters(), lr=1e-3)
+        optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=1e-3) for sender in self.senders]
+        optimizers_receiver = [torch.optim.Adam(receiver.parameters(), lr=1e-3) for receiver in self.receivers]
 
-        return optimizer_sender, optimizer_receiver
+        return tuple(itertools.chain(optimizers_sender, optimizers_receiver))
 
     def training_step(self, batch, batch_idx):
-        opt_sender, opt_receiver = self.optimizers()
+        optimizers = self.optimizers()
+        opts_sender = optimizers[:self.model_hparams.num_senders]
+        opts_receiver = optimizers[self.model_hparams.num_senders:]
+
+        # Sample sender and receiver for this batch:
+        sender_idx = random.choice(range(self.model_hparams.num_senders))
+        receiver_idx = random.choice(range(self.model_hparams.num_receivers))
+
+        opt_sender = opts_sender[sender_idx]
+        opt_receiver = opts_receiver[receiver_idx]
+
         opt_sender.zero_grad()
         opt_receiver.zero_grad()
-        loss, acc = self.forward(batch)
+        loss, acc = self.forward(batch, sender_idx, receiver_idx)
         self.manual_backward(loss)
 
         perform_sender_update = torch.rand(1) < self.model_hparams.sender_learning_speed
@@ -191,22 +210,26 @@ class SignalingGameModule(pl.LightningModule):
             opt_receiver.step()
 
     def forward(
-        self, batch,
+        self, batch, sender_idx, receiver_idx
     ):
+        sender = self.senders[sender_idx]
+        receiver = self.receivers[receiver_idx]
+
         sender_input, receiver_input, labels = batch
-        message, log_prob_s, entropy_s = self.sender(sender_input)
+        message, log_prob_s, entropy_s = sender(sender_input)
         message_lengths = find_lengths(message)
-        receiver_output = self.receiver(
+        receiver_output = receiver(
             message, receiver_input, message_lengths
         )
 
         acc = (receiver_output.argmax(dim=1) == labels).detach().float().mean()
-        self.log("train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
+        self.log(f"train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
         assert len(receiver_loss) == batch_size
-        self.log("receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log("receiver_loss", receiver_loss.mean(), logger=True, add_dataloader_idx=False)
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
         effective_entropy_s = torch.zeros(batch_size)
@@ -224,7 +247,7 @@ class SignalingGameModule(pl.LightningModule):
         weighted_entropy = (
             effective_entropy_s.mean() * self.sender_entropy_coeff
         )
-        self.log("weighted_entropy", weighted_entropy, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log("weighted_entropy", weighted_entropy, logger=True, add_dataloader_idx=False)
 
         log_prob = effective_log_prob_s
 
@@ -255,13 +278,18 @@ class SignalingGameModule(pl.LightningModule):
         return optimized_loss, acc
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
+        # TODO: for now only evaluating first sender-receiver pair
+        sender_idx = 0
+        receiver_idx = 0
+
         if dataloader_idx == 0:
             # Generalization:
-            loss, acc = self.forward(batch)
+            loss, acc = self.forward(batch, sender_idx, receiver_idx)
             return acc
         else:
             # Language analysis
-            messages, log_prob_s, entropy_s = self.sender(batch)
+            sender = self.senders[sender_idx]
+            messages, log_prob_s, entropy_s = sender(batch)
             return batch, messages
 
     def validation_epoch_end(self, validation_step_outputs):
