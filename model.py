@@ -31,7 +31,6 @@ class Receiver(nn.Module):
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
     def forward(self, message, input=None, lengths=None):
-        # print("\n\nMessage: ", message)
         emb = self.embedding(message)
 
         if lengths is None:
@@ -42,8 +41,6 @@ class Receiver(nn.Module):
         )
         out, (rnn_hidden, _) = self.lstm(packed)
 
-        #TODO:
-        # encoded = out?
         encoded_message = rnn_hidden[-1]
 
         embedded_input = self.fc1(input).tanh()
@@ -92,6 +89,7 @@ class Sender(nn.Module):
                 for i in range(self.num_layers)
             ]
         )
+        self.layer_norm = nn.LayerNorm(hidden_size)
 
     def forward(self, x):
         batch_size = x.shape[0]
@@ -114,6 +112,9 @@ class Sender(nn.Module):
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 input = h_t
+
+            # TODO: use actual layer norm LSTM cell
+            h_t = self.layer_norm(h_t)
 
             step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
             distr = Categorical(logits=step_logits)

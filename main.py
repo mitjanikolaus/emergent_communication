@@ -3,7 +3,7 @@ from argparse import Namespace
 import yaml
 import pytorch_lightning as pl
 
-from data import SignalingGameDataModule, SignalingGameDataset
+from data import SignalingGameDataModule
 from model import SignalingGameModule
 
 

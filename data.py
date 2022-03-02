@@ -15,19 +15,21 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
 
         dataset = SignalingGameDataset(num_features, num_values)
-        self.data_train, self.data_test = torch.utils.data.random_split(dataset, [round(len(dataset)*(1-test_set_size)), round(len(dataset)*test_set_size)])
+        num_test_samples = round(len(dataset)*test_set_size)
+        num_train_samples = len(dataset) - num_test_samples
+        self.data_train, self.data_test = torch.utils.data.random_split(dataset, [num_train_samples, num_test_samples])
         print("Num meanings in train: ", len(self.data_train))
         print("Num meanings in test: ", len(self.data_test))
 
-        self.train_dataset = SignalingGameDiscriminationDataset(self.data_train, num_distractors)
-        self.generalization_dataset = SignalingGameDiscriminationDataset(self.data_test, num_distractors)
+        self.train_dataset_discrimination = SignalingGameDiscriminationDataset(self.data_train, num_distractors)
+        self.test_dataset_discrimination = SignalingGameDiscriminationDataset(self.data_test, num_distractors)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.train_dataset_discrimination, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        generalization_dataloader = DataLoader(self.generalization_dataset, batch_size=self.batch_size,
-                                                  num_workers=self.num_workers)
+        generalization_dataloader = DataLoader(self.test_dataset_discrimination, batch_size=self.batch_size,
+                                               num_workers=self.num_workers)
         language_analysis_dataloader = DataLoader(self.data_train, batch_size=self.batch_size,
                                                   num_workers=self.num_workers)
         return generalization_dataloader, language_analysis_dataloader
@@ -64,8 +66,6 @@ class SignalingGameDiscriminationDataset(IterableDataset):
         self.num_distractors = num_distractors
 
     def get_sample(self):
-        target_position = random.choice(range(self.num_distractors))
-
         receiver_input = []
         for d in range(self.num_distractors):
             distractor = self.dataset[random.choice(range(len(self.dataset)))]
@@ -73,10 +73,10 @@ class SignalingGameDiscriminationDataset(IterableDataset):
 
         receiver_input = torch.stack(receiver_input)
 
-        label = target_position
-        sender_input = receiver_input[label]
+        target_position = random.choice(range(self.num_distractors))
+        sender_input = receiver_input[target_position]
 
-        return sender_input, receiver_input, label
+        return sender_input, receiver_input, target_position
 
     def __iter__(self):
         while 1:
