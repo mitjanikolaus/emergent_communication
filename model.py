@@ -1,4 +1,5 @@
 import itertools
+import math
 import random
 from collections import defaultdict
 
@@ -308,8 +309,9 @@ class SignalingGameModule(pl.LightningModule):
         messages = torch.cat([message for meaning, message in lang_analysis_results])
 
         meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
-        messages_strings = pd.DataFrame(messages).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
 
+        num_digits = int(math.log10(self.model_hparams.vocab_size))+1
+        messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
         messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
         messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
