@@ -214,6 +214,11 @@ class SignalingGameModule(pl.LightningModule):
         if perform_receiver_update:
             opt_receiver.step()
 
+        self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
+        self.log(f"train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+
+
     def forward(
         self, batch, sender_idx, receiver_idx
     ):
@@ -228,13 +233,10 @@ class SignalingGameModule(pl.LightningModule):
         )
 
         acc = (receiver_output.argmax(dim=1) == labels).detach().float().mean()
-        self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
-        self.log(f"train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
         assert len(receiver_loss) == batch_size
-        self.log("receiver_loss", receiver_loss.mean(), logger=True, add_dataloader_idx=False)
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
         effective_entropy_s = torch.zeros(batch_size).type_as(sender_input)
@@ -252,7 +254,6 @@ class SignalingGameModule(pl.LightningModule):
         weighted_entropy = (
             effective_entropy_s.mean() * self.sender_entropy_coeff
         )
-        self.log("weighted_entropy", weighted_entropy, logger=True, add_dataloader_idx=False)
 
         log_prob = effective_log_prob_s
 
@@ -266,10 +267,6 @@ class SignalingGameModule(pl.LightningModule):
         policy_loss = (
             (receiver_loss.detach() - loss_baseline) * log_prob
         ).mean()
-
-        self.log("policy_length_loss", policy_length_loss, prog_bar=False, logger=True, add_dataloader_idx=False)
-        self.log("loss_baseline", loss_baseline, prog_bar=True, logger=True, add_dataloader_idx=False)
-        self.log("policy_loss", policy_loss, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         optimized_loss = policy_length_loss + policy_loss - weighted_entropy
 
