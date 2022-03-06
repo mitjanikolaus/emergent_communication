@@ -26,29 +26,38 @@ class Receiver(nn.Module):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
 
-        self.lstm = nn.LSTM(
-            input_size=embed_dim,
-            batch_first=True,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-        )
+        if num_layers > 1:
+            raise NotImplementedError("Receiver with multiple layers not implemented")
+
+        self.hidden_size = hidden_size
+
+        self.cell = nn.LSTMCell(input_size=embed_dim, hidden_size=hidden_size)
+        self.layer_norm = nn.LayerNorm(hidden_size)
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
-    def forward(self, message, input=None, lengths=None):
-        emb = self.embedding(message)
+    def forward(self, message, receiver_input=None, lengths=None):
+        input = self.embedding(message)
 
         if lengths is None:
             lengths = find_lengths(message)
 
-        packed = nn.utils.rnn.pack_padded_sequence(
-            emb, lengths.cpu(), batch_first=True, enforce_sorted=False
-        )
-        out, (rnn_hidden, _) = self.lstm(packed)
+        batch_size = message.shape[0]
+        h_t = torch.zeros((batch_size, self.hidden_size)).type_as(input)
+        c_t = torch.zeros((batch_size, self.hidden_size)).type_as(input)
 
-        encoded_message = rnn_hidden[-1]
+        out = []
+        for step in range(message.size(1)):
+            h_t, c_t = self.cell(input[:, step], (h_t, c_t))
+            # TODO: use actual layer norm LSTM cell
+            h_t = self.layer_norm(h_t)
 
-        embedded_input = self.fc1(input).tanh()
+            out.append(h_t)
+
+        out = torch.stack(out)
+        encoded_message = out[lengths-1, range(batch_size)]
+
+        embedded_input = self.fc1(receiver_input).tanh()
         dots = torch.matmul(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
         softmaxed = F.softmax(dots, dim=1)
         return softmaxed
