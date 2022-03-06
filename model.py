@@ -35,14 +35,12 @@ class Receiver(nn.Module):
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
-    def forward(self, message, input=None, lengths=None):
+    def forward(self, batch):
+        message, input, message_lengths = batch
         emb = self.embedding(message)
 
-        if lengths is None:
-            lengths = find_lengths(message)
-
         packed = nn.utils.rnn.pack_padded_sequence(
-            emb, lengths.cpu(), batch_first=True, enforce_sorted=False
+            emb, message_lengths.cpu(), batch_first=True, enforce_sorted=False
         )
         out, (rnn_hidden, _) = self.lstm(packed)
 
@@ -65,14 +63,6 @@ class Sender(pl.LightningModule):
         max_len,
         num_layers=1,
     ):
-        """
-        :param agent: the agent to be wrapped
-        :param vocab_size: the communication vocabulary size
-        :param embed_dim: the size of the embedding used to embed the output symbols
-        :param hidden_size: the RNN cell's hidden state size
-        :param max_len: maximal length of the output messages
-        :param cell: type of the cell used (rnn, gru, lstm)
-        """
         super(Sender, self).__init__()
         self.max_len = max_len
 
@@ -146,24 +136,148 @@ class Sender(pl.LightningModule):
         return sequence, logits, entropy
 
 
+class SenderReceiver(pl.LightningModule):
+    def __init__(
+        self,
+        n_features,
+        n_values,
+        vocab_size,
+        embed_dim,
+        hidden_size,
+        max_len,
+        num_layers=1,
+    ):
+        super(SenderReceiver, self).__init__()
+        self.max_len = max_len
+
+        self.embed_input = nn.Linear(n_features*n_values, embed_dim)
+
+        self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+
+        self.hidden_size = hidden_size
+        self.embed_dim = embed_dim
+        self.vocab_size = vocab_size
+        self.num_layers = num_layers
+
+        self.cells = nn.ModuleList(
+            [
+                nn.LSTMCell(input_size=embed_dim, hidden_size=hidden_size)
+                if i == 0
+                else nn.LSTMCell(input_size=hidden_size, hidden_size=hidden_size)
+                for i in range(self.num_layers)
+            ]
+        )
+        self.layer_norm = nn.LayerNorm(hidden_size)
+
+    def forward(self, batch):
+        if isinstance(batch, tuple):
+            return self.forward_receiver(batch)
+        else:
+            return self.forward_sender(batch)
+
+    def forward_sender(self, x):
+        batch_size = x.shape[0]
+
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)]
+
+        prev_c = [
+            torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)
+        ]
+        input = self.embed_input(x)
+
+        sequence = []
+        logits = []
+        entropy = []
+
+        for step in range(self.max_len):
+            for i, layer in enumerate(self.cells):
+                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
+                prev_c[i] = c_t
+                prev_hidden[i] = h_t
+                input = h_t
+
+            # TODO: use actual layer norm LSTM cell
+            h_t = self.layer_norm(h_t)
+
+            step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
+            distr = Categorical(logits=step_logits)
+            entropy.append(distr.entropy())
+
+            if self.training:
+                x = distr.sample()
+            else:
+                x = step_logits.argmax(dim=1)
+            logits.append(distr.log_prob(x))
+
+            input = self.embedding(x)
+            sequence.append(x)
+
+        sequence = torch.stack(sequence).permute(1, 0)
+        logits = torch.stack(logits).permute(1, 0)
+        entropy = torch.stack(entropy).permute(1, 0)
+
+        zeros = torch.zeros((sequence.size(0), 1)).type_as(x)
+
+        sequence = torch.cat([sequence, zeros.long()], dim=1)
+        logits = torch.cat([logits, zeros], dim=1)
+        entropy = torch.cat([entropy, zeros], dim=1)
+
+        return sequence, logits, entropy
+
+    def forward_receiver(self, batch):
+        message, input_receiver, message_lengths = batch
+        batch_size = message.shape[0]
+
+        perplexities = []
+        for distractor_idx in range(input_receiver.shape[1]):
+            input = self.embed_input(input_receiver[:,distractor_idx])
+
+            prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input_receiver) for _ in
+                           range(self.num_layers)]
+
+            prev_c = [
+                torch.zeros((batch_size, self.hidden_size)).type_as(input_receiver) for _ in range(self.num_layers)
+            ]
+
+
+            perplexities_distractor = []
+
+            for step in range(self.max_len):
+                for i, layer in enumerate(self.cells):
+                    h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
+                    prev_c[i] = c_t
+                    prev_hidden[i] = h_t
+                    input = h_t
+
+                # TODO: use actual layer norm LSTM cell
+                h_t = self.layer_norm(h_t)
+
+                step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
+                # TODO: EOS handling?
+                ppls = step_logits[range(batch_size), message[:,step]]
+                perplexities_distractor.append(ppls)
+
+                x = message[:, step]
+                input = self.embedding(x)
+
+            perplexities_distractor = torch.stack(perplexities_distractor).sum(dim=0)
+            perplexities.append(perplexities_distractor)
+
+        perplexities = torch.stack(perplexities).permute(1,0)
+
+        softmaxed = F.softmax(perplexities, dim=1)
+
+        return softmaxed
+
+
 class SignalingGameModule(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
         self.save_hyperparameters()
         self.model_hparams = AttributeDict(self.hparams["model"])
 
-        self.senders = []
-        for _ in range(self.model_hparams.num_senders):
-            sender = Sender(self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim, self.model_hparams.sender_hidden_dim, self.model_hparams.max_len, self.model_hparams.sender_num_layers)
-            self.senders.append(sender)
-        self.senders = ModuleList(self.senders)
-
-
-        self.receivers = []
-        for _ in range(self.model_hparams.num_receivers):
-            receiver = Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim, self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.receiver_num_layers)
-            self.receivers.append(receiver)
-        self.receivers = ModuleList(self.receivers)
+        self.init_agents()
 
         self.sender_entropy_coeff = self.model_hparams.sender_entropy_coeff
         self.length_cost = self.model_hparams.length_cost
@@ -183,6 +297,40 @@ class SignalingGameModule(pl.LightningModule):
 
         self.automatic_optimization = False
 
+    def init_agents(self):
+        if self.model_hparams.symmetric:
+            if self.model_hparams.num_senders != self.model_hparams.num_receivers:
+                raise ValueError("Symmetric game requires same number of senders and receivers.")
+            self.senders = ModuleList(
+                [
+                    SenderReceiver(self.model_hparams.num_features, self.model_hparams.num_values,
+                        self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
+                        self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
+                        self.model_hparams.sender_num_layers)
+                    for _ in range(self.model_hparams.num_senders * 2)
+                ]
+            )
+            self.receivers = self.senders
+        else:
+            self.senders = ModuleList(
+                [
+                    Sender(self.model_hparams.num_features, self.model_hparams.num_values,
+                        self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
+                        self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
+                        self.model_hparams.sender_num_layers)
+                    for _ in range(self.model_hparams.num_senders)
+                ]
+            )
+
+            self.receivers = ModuleList(
+                [
+                    Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
+                                    self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
+                                    self.model_hparams.num_values, self.model_hparams.receiver_num_layers)
+                    for _ in range(self.model_hparams.num_receivers)
+                 ]
+            )
+
     def configure_optimizers(self):
         optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=1e-3) for sender in self.senders]
         optimizers_receiver = [torch.optim.Adam(receiver.parameters(), lr=1e-3) for receiver in self.receivers]
@@ -191,15 +339,29 @@ class SignalingGameModule(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         optimizers = self.optimizers()
-        opts_sender = optimizers[:self.model_hparams.num_senders]
-        opts_receiver = optimizers[self.model_hparams.num_senders:]
 
-        # Sample sender and receiver for this batch:
-        sender_idx = random.choice(range(self.model_hparams.num_senders))
-        receiver_idx = random.choice(range(self.model_hparams.num_receivers))
+        if self.model_hparams.symmetric:
+            num_agents = self.model_hparams.num_senders + self.model_hparams.num_receivers
+            sender_idx = random.choice(range(num_agents))
+            receiver_idx = random.choice(range(num_agents))
+            # Avoid communication within same agent
+            while (sender_idx == receiver_idx):
+                sender_idx = random.choice(range(num_agents))
+                receiver_idx = random.choice(range(num_agents))
 
-        opt_sender = opts_sender[sender_idx]
-        opt_receiver = opts_receiver[receiver_idx]
+            opt_sender = optimizers[sender_idx]
+            opt_receiver = optimizers[receiver_idx]
+
+        else:
+            opts_sender = optimizers[:self.model_hparams.num_senders]
+            opts_receiver = optimizers[self.model_hparams.num_senders:]
+
+            # Sample sender and receiver for this batch:
+            sender_idx = random.choice(range(self.model_hparams.num_senders))
+            receiver_idx = random.choice(range(self.model_hparams.num_receivers))
+
+            opt_sender = opts_sender[sender_idx]
+            opt_receiver = opts_receiver[receiver_idx]
 
         opt_sender.zero_grad()
         opt_receiver.zero_grad()
@@ -229,7 +391,7 @@ class SignalingGameModule(pl.LightningModule):
         message, log_prob_s, entropy_s = sender(sender_input)
         message_lengths = find_lengths(message)
         receiver_output = receiver(
-            message, receiver_input, message_lengths
+            (message, receiver_input, message_lengths)
         )
 
         acc = (receiver_output.argmax(dim=1) == labels).detach().float().mean()
@@ -283,6 +445,8 @@ class SignalingGameModule(pl.LightningModule):
         # TODO: for now only evaluating first sender-receiver pair
         sender_idx = 0
         receiver_idx = 0
+        if self.model_hparams.symmetric:
+            receiver_idx = 1
 
         if dataloader_idx == 0:
             # Generalization:
