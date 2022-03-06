@@ -34,6 +34,18 @@ class SignalingGameDataModule(pl.LightningDataModule):
                                                   num_workers=self.num_workers)
         return generalization_dataloader, language_analysis_dataloader
 
+    def transfer_batch_to_device(self, batch, device, dataloader_idx):
+        if dataloader_idx == 0:
+            sender_input, receiver_input, target_position = batch
+            sender_input = sender_input.to(device)
+            receiver_input = receiver_input.to(device)
+            target_position = target_position.to(device)
+            return sender_input, receiver_input, target_position
+        else:
+            sender_input = batch
+            sender_input = sender_input.to(device)
+            return sender_input
+
 
 def generate_data(num_features, num_values):
     inputs = itertools.product(range(num_values), repeat=num_features)

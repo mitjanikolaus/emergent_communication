@@ -10,6 +10,8 @@ from torch import nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 import pytorch_lightning as pl
+from torch.nn import ModuleList
+
 
 import pandas as pd
 
@@ -52,7 +54,7 @@ class Receiver(nn.Module):
         return softmaxed
 
 
-class Sender(nn.Module):
+class Sender(pl.LightningModule):
     def __init__(
         self,
         n_features,
@@ -97,12 +99,11 @@ class Sender(nn.Module):
     def forward(self, x):
         batch_size = x.shape[0]
 
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size)) for _ in range(self.num_layers)]
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)]
 
         prev_c = [
-            torch.zeros((batch_size, self.hidden_size)) for _ in range(self.num_layers)
+            torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)
         ]
-
         input = self.embed_input(x)
 
         sequence = []
@@ -136,7 +137,7 @@ class Sender(nn.Module):
         logits = torch.stack(logits).permute(1, 0)
         entropy = torch.stack(entropy).permute(1, 0)
 
-        zeros = torch.zeros((sequence.size(0), 1)).to(sequence.device)
+        zeros = torch.zeros((sequence.size(0), 1)).type_as(x)
 
         sequence = torch.cat([sequence, zeros.long()], dim=1)
         logits = torch.cat([logits, zeros], dim=1)
@@ -155,11 +156,14 @@ class SignalingGameModule(pl.LightningModule):
         for _ in range(self.model_hparams.num_senders):
             sender = Sender(self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim, self.model_hparams.sender_hidden_dim, self.model_hparams.max_len, self.model_hparams.sender_num_layers)
             self.senders.append(sender)
+        self.senders = ModuleList(self.senders)
+
 
         self.receivers = []
         for _ in range(self.model_hparams.num_receivers):
             receiver = Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim, self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features, self.model_hparams.num_values, self.model_hparams.receiver_num_layers)
             self.receivers.append(receiver)
+        self.receivers = ModuleList(self.receivers)
 
         self.sender_entropy_coeff = self.model_hparams.sender_entropy_coeff
         self.length_cost = self.model_hparams.length_cost
@@ -233,11 +237,11 @@ class SignalingGameModule(pl.LightningModule):
         self.log("receiver_loss", receiver_loss.mean(), logger=True, add_dataloader_idx=False)
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
-        effective_entropy_s = torch.zeros(batch_size)
+        effective_entropy_s = torch.zeros(batch_size).type_as(sender_input)
 
         # the log prob of the choices made by S before and including the eos symbol - again, we don't
         # care about the rest
-        effective_log_prob_s = torch.zeros(batch_size)
+        effective_log_prob_s = torch.zeros(batch_size).type_as(sender_input)
 
         for i in range(message.size(1)):
             not_eosed = (i < message_lengths).float()
@@ -286,12 +290,12 @@ class SignalingGameModule(pl.LightningModule):
         if dataloader_idx == 0:
             # Generalization:
             loss, acc = self.forward(batch, sender_idx, receiver_idx)
-            return acc
+            return acc.cpu()
         else:
             # Language analysis
             sender = self.senders[sender_idx]
             messages, log_prob_s, entropy_s = sender(batch)
-            return batch, messages
+            return batch.cpu(), messages.cpu()
 
     def validation_epoch_end(self, validation_step_outputs):
         generalization_results, lang_analysis_results = validation_step_outputs
