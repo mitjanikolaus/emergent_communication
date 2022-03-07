@@ -376,10 +376,9 @@ class SignalingGameModule(pl.LightningModule):
         if perform_receiver_update:
             opt_receiver.step()
 
-        self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
+        # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
         self.log(f"train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
         self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-
 
     def forward(
         self, batch, sender_idx, receiver_idx
@@ -441,12 +440,24 @@ class SignalingGameModule(pl.LightningModule):
 
         return optimized_loss, acc
 
-    def validation_step(self, batch, batch_idx, dataloader_idx):
-        # TODO: for now only evaluating first sender-receiver pair
-        sender_idx = 0
-        receiver_idx = 0
+    def on_validation_epoch_start(self):
+        # Sample agent indices for this validation epoch
         if self.model_hparams.symmetric:
-            receiver_idx = 1
+            num_agents = self.model_hparams.num_senders + self.model_hparams.num_receivers
+            self.val_epoch_sender_idx = random.choice(range(num_agents))
+            self.val_epoch_receiver_idx = random.choice(range(num_agents))
+            # Avoid communication within same agent
+            while (self.val_epoch_sender_idx == self.val_epoch_receiver_idx):
+                self.val_epoch_sender_idx = random.choice(range(num_agents))
+                self.val_epoch_receiver_idx = random.choice(range(num_agents))
+        else:
+            self.val_epoch_sender_idx = random.choice(range(self.model_hparams.num_senders))
+            self.val_epoch_receiver_idx = random.choice(range(self.model_hparams.num_receivers))
+        print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
+
+    def validation_step(self, batch, batch_idx, dataloader_idx):
+        sender_idx = self.val_epoch_sender_idx
+        receiver_idx = self.val_epoch_receiver_idx
 
         if dataloader_idx == 0:
             # Generalization:
