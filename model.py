@@ -135,6 +135,42 @@ class Sender(pl.LightningModule):
 
         return sequence, logits, entropy
 
+    def forward_supervised(self, x, target):
+        batch_size = x.shape[0]
+
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)]
+
+        prev_c = [
+            torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)
+        ]
+        input = self.embed_input(x)
+
+        logits = []
+
+        for step in range(self.max_len):
+            for i, layer in enumerate(self.cells):
+                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
+                prev_c[i] = c_t
+                prev_hidden[i] = h_t
+                input = h_t
+
+            # TODO: use actual layer norm LSTM cell
+            h_t = self.layer_norm(h_t)
+
+            step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
+
+            x = target[:,step]
+            logits.append(step_logits)
+
+            input = self.embedding(x)
+
+        logits = torch.stack(logits).permute(1, 2, 0)
+
+        zeros = torch.zeros((logits.size(0), logits.size(1), 1)).type_as(x)
+        logits = torch.cat([logits, zeros], dim=2)
+
+        return logits
+
 
 class SenderReceiver(pl.LightningModule):
     def __init__(
@@ -365,7 +401,8 @@ class SignalingGameModule(pl.LightningModule):
 
         opt_sender.zero_grad()
         opt_receiver.zero_grad()
-        loss, acc = self.forward(batch, sender_idx, receiver_idx)
+        loss, acc, messages = self.forward(batch, sender_idx, receiver_idx)
+
         self.manual_backward(loss)
 
         perform_sender_update = torch.rand(1) < self.model_hparams.sender_learning_speed
@@ -377,8 +414,21 @@ class SignalingGameModule(pl.LightningModule):
             opt_receiver.step()
 
         # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
-        self.log(f"train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
         self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+
+        # Imitation step
+        if self.model_hparams.imitation:
+            messages_success = messages[acc]
+            input_success = batch[0][acc]
+            if len(messages_success) > 0:
+                for idx, sender in enumerate(self.senders):
+                    opt = opts_sender[idx]
+                    opt.zero_grad()
+                    logits = sender.forward_supervised(input_success, messages_success)
+                    loss = F.cross_entropy(logits, messages_success)
+                    self.manual_backward(loss)
+                    opt.step()
 
     def forward(
         self, batch, sender_idx, receiver_idx
@@ -387,13 +437,12 @@ class SignalingGameModule(pl.LightningModule):
         receiver = self.receivers[receiver_idx]
 
         sender_input, receiver_input, labels = batch
-        message, log_prob_s, entropy_s = sender(sender_input)
-        message_lengths = find_lengths(message)
+        messages, log_prob_s, entropy_s = sender(sender_input)
+        message_lengths = find_lengths(messages)
         receiver_output = receiver(
-            (message, receiver_input, message_lengths)
+            (messages, receiver_input, message_lengths)
         )
-
-        acc = (receiver_output.argmax(dim=1) == labels).detach().float().mean()
+        acc = (receiver_output.argmax(dim=1) == labels).detach()
 
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
@@ -406,7 +455,7 @@ class SignalingGameModule(pl.LightningModule):
         # care about the rest
         effective_log_prob_s = torch.zeros(batch_size).type_as(sender_input)
 
-        for i in range(message.size(1)):
+        for i in range(messages.size(1)):
             not_eosed = (i < message_lengths).float()
             effective_entropy_s += entropy_s[:, i] * not_eosed
             effective_log_prob_s += log_prob_s[:, i] * not_eosed
@@ -435,10 +484,11 @@ class SignalingGameModule(pl.LightningModule):
         optimized_loss += receiver_loss.mean()
 
         if self.training:
+            #TODO: baselines for population
             self.baselines["loss"].update(receiver_loss)
             self.baselines["length"].update(length_loss)
 
-        return optimized_loss, acc
+        return optimized_loss, acc, messages
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
@@ -461,8 +511,8 @@ class SignalingGameModule(pl.LightningModule):
 
         if dataloader_idx == 0:
             # Generalization:
-            loss, acc = self.forward(batch, sender_idx, receiver_idx)
-            return acc.cpu()
+            loss, acc, messages_success = self.forward(batch, sender_idx, receiver_idx)
+            return acc.float().mean().cpu()
         else:
             # Language analysis
             sender = self.senders[sender_idx]
