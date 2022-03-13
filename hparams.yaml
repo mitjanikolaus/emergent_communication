@@ -24,6 +24,7 @@ trainer:
   log_every_n_steps: 100
   limit_val_batches: 100
   limit_train_batches: 100000
+  gpus: 0
 #  reload_dataloaders_every_n_epochs: 1
 data:
   batch_size: 1024
