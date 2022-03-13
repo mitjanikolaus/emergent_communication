@@ -1,21 +1,22 @@
 model:
+  symmetric: false
   baseline_type: mean
   length_cost: 0.0
-  max_len: 10
+  max_len: 5
   num_features: 5
-  num_values: 5
+  num_values: 4
   num_senders: 1
   num_receivers: 1
-  receiver_embed_dim: 10
+  receiver_embed_dim: 128
   receiver_num_layers: 1
   receiver_hidden_dim: 128
   receiver_learning_speed: 1
-  sender_embed_dim: 10
+  sender_embed_dim: 128
   sender_entropy_coeff: 0.1
   sender_num_layers: 1
   sender_hidden_dim: 128
   sender_learning_speed: 1
-  vocab_size: 20
+  vocab_size: 10
   log_topsim_on_validation: false
   log_entropy_on_validation: true
 trainer:
@@ -25,7 +26,7 @@ trainer:
   limit_train_batches: 100000
 #  reload_dataloaders_every_n_epochs: 1
 data:
-  batch_size: 64
-  num_distractors: 10
+  batch_size: 1024
+  num_distractors: 2  # Including the target object
   test_set_size: 0.1
   num_workers: 0

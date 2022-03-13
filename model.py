@@ -15,6 +15,7 @@ from torch.nn import ModuleList
 
 import pandas as pd
 
+from data import SPEECH_ACTS, get_speech_act, get_speech_act_code
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
@@ -25,6 +26,10 @@ class Receiver(nn.Module):
     ):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
+
+        #TODO: initialization?
+        self.embedding_true = nn.Parameter(torch.zeros(hidden_size))
+        self.embedding_false = nn.Parameter(torch.zeros(hidden_size))
 
         self.lstm = nn.LSTM(
             input_size=embed_dim,
@@ -37,6 +42,7 @@ class Receiver(nn.Module):
 
     def forward(self, batch):
         message, input, message_lengths = batch
+        batch_size = message.shape[0]
         emb = self.embedding(message)
 
         packed = nn.utils.rnn.pack_padded_sequence(
@@ -46,7 +52,14 @@ class Receiver(nn.Module):
 
         encoded_message = rnn_hidden[-1]
 
-        embedded_input = self.fc1(input).tanh()
+        embedded_input = self.fc1(input)
+
+        embedding_true = self.embedding_true.reshape(1, 1, -1).repeat(batch_size, 1, 1)
+        embedding_false = self.embedding_false.reshape(1, 1, -1).repeat(batch_size, 1, 1)
+
+        embedded_input = torch.cat((embedded_input, embedding_true, embedding_false), dim=1)
+
+        embedded_input = embedded_input.tanh()
         dots = torch.matmul(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
         softmaxed = F.softmax(dots, dim=1)
         return softmaxed
@@ -66,7 +79,8 @@ class Sender(pl.LightningModule):
         super(Sender, self).__init__()
         self.max_len = max_len
 
-        self.embed_input = nn.Linear(n_features*n_values, embed_dim)
+        num_speech_acts = len(SPEECH_ACTS)
+        self.embed_input = nn.Linear(n_features*n_values+num_speech_acts, embed_dim)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding = nn.Embedding(vocab_size, embed_dim)
@@ -377,7 +391,9 @@ class SignalingGameModule(pl.LightningModule):
             opt_receiver.step()
 
         # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
-        self.log(f"train_acc", acc, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"speech_act_acc", get_acc_per_speech_act(batch, acc), prog_bar=True, logger=True, add_dataloader_idx=False)
+
         self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
     def forward(
@@ -393,7 +409,7 @@ class SignalingGameModule(pl.LightningModule):
             (message, receiver_input, message_lengths)
         )
 
-        acc = (receiver_output.argmax(dim=1) == labels).detach().float().mean()
+        acc = (receiver_output.argmax(dim=1) == labels).detach()
 
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
@@ -462,7 +478,7 @@ class SignalingGameModule(pl.LightningModule):
         if dataloader_idx == 0:
             # Generalization:
             loss, acc = self.forward(batch, sender_idx, receiver_idx)
-            return acc.cpu()
+            return acc.float().mean().cpu()
         else:
             # Language analysis
             sender = self.senders[sender_idx]
@@ -505,3 +521,12 @@ class SignalingGameModule(pl.LightningModule):
             topsim = compute_topsim(meanings, messages)
             self.log("topsim", topsim, prog_bar=True, logger=True)
             print("Topsim: ", topsim)
+
+
+def get_acc_per_speech_act(batch, acc):
+    sender_input, _, _ = batch
+    accs = {}
+    speech_acts_batch = np.array([get_speech_act(intent) for intent in sender_input])
+    for speech_act in SPEECH_ACTS:
+        accs[speech_act] = acc[speech_acts_batch == speech_act].float().mean()
+    return accs
