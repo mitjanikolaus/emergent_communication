@@ -36,7 +36,9 @@ class Receiver(nn.Module):
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
-        self.output_layer = nn.Linear(hidden_size*3, n_distractors+2)
+        self.output_layer = nn.Linear(hidden_size+n_distractors, n_distractors+2)
+        self.output_layer_2 = nn.Linear(n_distractors+2, n_distractors+2)
+
 
     def forward(self, batch):
         message, input, message_lengths = batch
@@ -53,8 +55,12 @@ class Receiver(nn.Module):
         embedded_input = self.fc1(input)
 
         embedded_input = embedded_input.tanh()
-        concatenated = torch.cat((embedded_input, torch.unsqueeze(encoded_message, dim=1)), dim=1)
-        out = self.output_layer(concatenated.reshape(batch_size, -1))
+
+        dots = torch.matmul(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
+
+        concatenated = torch.cat((dots, encoded_message), dim=1)
+        out = self.output_layer(concatenated)
+        out = self.output_layer_2(out.tanh())
         softmaxed = F.softmax(out, dim=1)
         return softmaxed
 
