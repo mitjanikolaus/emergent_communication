@@ -15,21 +15,17 @@ from torch.nn import ModuleList
 
 import pandas as pd
 
-from data import SPEECH_ACTS, get_speech_act, get_speech_act_code
+from data import SPEECH_ACTS, get_speech_act
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, n_features, n_values, num_layers=1
+            self, vocab_size, embed_dim, hidden_size, n_features, n_values, n_distractors, num_layers=1
     ):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
-
-        #TODO: initialization?
-        self.embedding_true = nn.Parameter(torch.zeros(hidden_size))
-        self.embedding_false = nn.Parameter(torch.zeros(hidden_size))
 
         self.lstm = nn.LSTM(
             input_size=embed_dim,
@@ -39,6 +35,8 @@ class Receiver(nn.Module):
         )
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
+
+        self.output_layer = nn.Linear(hidden_size*3, n_distractors+2)
 
     def forward(self, batch):
         message, input, message_lengths = batch
@@ -54,14 +52,10 @@ class Receiver(nn.Module):
 
         embedded_input = self.fc1(input)
 
-        embedding_true = self.embedding_true.reshape(1, 1, -1).repeat(batch_size, 1, 1)
-        embedding_false = self.embedding_false.reshape(1, 1, -1).repeat(batch_size, 1, 1)
-
-        embedded_input = torch.cat((embedded_input, embedding_true, embedding_false), dim=1)
-
         embedded_input = embedded_input.tanh()
-        dots = torch.matmul(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
-        softmaxed = F.softmax(dots, dim=1)
+        concatenated = torch.cat((embedded_input, torch.unsqueeze(encoded_message, dim=1)), dim=1)
+        out = self.output_layer(concatenated.reshape(batch_size, -1))
+        softmaxed = F.softmax(out, dim=1)
         return softmaxed
 
 
@@ -289,6 +283,7 @@ class SignalingGameModule(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
         self.save_hyperparameters()
+        self.num_distractors = self.hparams["data"]["num_distractors"]
         self.model_hparams = AttributeDict(self.hparams["model"])
 
         self.init_agents()
@@ -340,7 +335,8 @@ class SignalingGameModule(pl.LightningModule):
                 [
                     Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
                                     self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
-                                    self.model_hparams.num_values, self.model_hparams.receiver_num_layers)
+                                    self.model_hparams.num_values, self.num_distractors,
+                                    self.model_hparams.receiver_num_layers)
                     for _ in range(self.model_hparams.num_receivers)
                  ]
             )
