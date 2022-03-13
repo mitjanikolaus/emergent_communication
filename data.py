@@ -169,6 +169,10 @@ def get_object(intent):
     return intent[len(SPEECH_ACTS):]
 
 
+def get_objects(intents):
+    return intents[:, len(SPEECH_ACTS):]
+
+
 class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
     def __init__(self, datasets, num_distractors):
@@ -176,19 +180,15 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         self.label_true = num_distractors
         self.label_false = num_distractors + 1
         self.num_distractors = num_distractors
+        self.object_dataloader = DataLoader(datasets[0], shuffle=True, batch_size=num_distractors)
 
     def get_sample(self):
         dataset = random.choice(self.data)
         sender_input = random.choice(dataset)
         speech_act = dataset.dataset.speech_act_type
 
-        receiver_input = []
-        object_dataloader = self.data[0]
-        for d in range(self.num_distractors):
-            distractor = get_object(random.choice(object_dataloader))
-            receiver_input.append(distractor)
-
-        receiver_input = torch.stack(receiver_input)
+        distractors_with_speech_act = next(iter(self.object_dataloader))
+        receiver_input = get_objects(distractors_with_speech_act)
 
         if speech_act == REQUEST:
             target_position = random.choice(range(self.num_distractors))
