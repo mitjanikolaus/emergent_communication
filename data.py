@@ -183,7 +183,7 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         self.object_dataloader = DataLoader(datasets[0], shuffle=True, batch_size=num_distractors)
 
     def get_sample(self):
-        dataset = random.choice(self.data)
+        dataset = self.data[1]#random.choice(self.data)
         sender_input = random.choice(dataset)
         speech_act = dataset.dataset.speech_act_type
 
