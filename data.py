@@ -14,20 +14,27 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
 
-        self.train_datasets = []
-        self.test_datasets = []
-        for speech_act in SPEECH_ACTS:
-            dataset = SignalingGameSpeechActDataset(num_features, num_values, speech_act)
-            num_test_samples = round(len(dataset)*test_set_size)
-            num_train_samples = len(dataset) - num_test_samples
-            data_train, data_test = torch.utils.data.random_split(dataset, [num_train_samples, num_test_samples])
-            print("Num meanings in train: ", len(data_train))
-            print("Num meanings in test: ", len(data_test))
-            self.train_datasets.append(data_train)
-            self.test_datasets.append(data_test)
+        # self.train_datasets = []
+        # self.test_datasets = []
+        # for speech_act in SPEECH_ACTS:
+        #     dataset = SignalingGameSpeechActDataset(num_features, num_values, speech_act)
+        #     num_test_samples = round(len(dataset)*test_set_size)
+        #     num_train_samples = len(dataset) - num_test_samples
+        #     data_train, data_test = torch.utils.data.random_split(dataset, [num_train_samples, num_test_samples])
+        #     print("Num meanings in train: ", len(data_train))
+        #     print("Num meanings in test: ", len(data_test))
+        #     self.train_datasets.append(data_train)
+        #     self.test_datasets.append(data_test)
 
-        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(self.train_datasets, num_distractors)
-        self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(self.test_datasets, num_distractors)
+        # TODO:
+        # self.language_analysis_dataset = SignalingGameSpeechActDataset(num_features, num_values, REQUEST)
+
+
+        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(self.num_features, self.num_values, num_distractors, SPEECH_ACTS)
+        # TODO: currently train = test
+        self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(self.num_features, self.num_values, num_distractors, SPEECH_ACTS)
+        self.test_dataset_language_analysis = SignalingGameSpeechActsDiscriminationDataset(self.num_features, self.num_values, num_distractors, [REQUEST])
+
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset_discrimination, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -35,21 +42,23 @@ class SignalingGameDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         generalization_dataloader = DataLoader(self.test_dataset_discrimination, batch_size=self.batch_size,
                                                num_workers=self.num_workers)
-        language_analysis_dataloader = DataLoader(self.train_datasets[0], batch_size=self.batch_size,
-                                                  num_workers=self.num_workers)
+        # language_analysis_dataloader = DataLoader(self.language_analysis_dataset, batch_size=self.batch_size,
+        #                                           num_workers=self.num_workers)
+        language_analysis_dataloader = DataLoader(self.test_dataset_language_analysis, batch_size=self.batch_size,
+                                               num_workers=self.num_workers)
         return generalization_dataloader, language_analysis_dataloader
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
-        if dataloader_idx == 0:
-            sender_input, receiver_input, target_position = batch
-            sender_input = sender_input.to(device)
-            receiver_input = receiver_input.to(device)
-            target_position = target_position.to(device)
-            return sender_input, receiver_input, target_position
-        else:
-            sender_input = batch
-            sender_input = sender_input.to(device)
-            return sender_input
+        # if dataloader_idx == 0:
+        sender_input, receiver_input, target_position = batch
+        sender_input = sender_input.to(device)
+        receiver_input = receiver_input.to(device)
+        target_position = target_position.to(device)
+        return sender_input, receiver_input, target_position
+        # else:
+        #     sender_input = batch
+        #     sender_input = sender_input.to(device)
+        #     return sender_input
 
 
 def generate_objects(num_features, num_values):
@@ -136,8 +145,20 @@ def generate_questions(num_features, num_values, speech_act):
 
     return questions
 
+def generate_object(num_features, num_values):
+    z = torch.zeros((num_features, num_values))
+    for i in range(num_features):
+        z[i, random.choice(range(num_values))] = 1
+    return z.view(-1)
 
-class SignalingGameSpeechActDataset(IterableDataset):
+
+def generate_question_content(num_features, num_values):
+    z = torch.zeros((num_features, num_values))
+    z[random.choice(range(num_features)), random.choice(range(num_values))] = 1
+    return z.view(-1)
+
+
+class SignalingGameSpeechActDataset(Dataset):
     def __init__(self, num_features, num_values, speech_act_type):
         self.speech_act_type = speech_act_type
         if speech_act_type == REQUEST:
@@ -175,35 +196,40 @@ def get_objects(intents):
 
 class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
-    def __init__(self, datasets, num_distractors):
-        self.data = datasets
+    def __init__(self, num_features, num_values, num_distractors, speech_acts):
         self.label_true = num_distractors
         self.label_false = num_distractors + 1
         self.num_distractors = num_distractors
-        self.object_dataloader = DataLoader(datasets[0], shuffle=True, batch_size=num_distractors)
+        self.num_features = num_features
+        self.num_values = num_values
+        self.speech_acts = speech_acts
 
     def get_sample(self):
-        dataset = self.data[1]#random.choice(self.data)
-        sender_input = random.choice(dataset)
-        speech_act = dataset.dataset.speech_act_type
+        speech_act = random.choice(self.speech_acts)
 
-        distractors_with_speech_act = next(iter(self.object_dataloader))
-        receiver_input = get_objects(distractors_with_speech_act)
+        distractors = [generate_object(self.num_features, self.num_values) for _ in range(self.num_distractors)]
+        receiver_input = torch.stack(distractors)
 
         if speech_act == REQUEST:
             target_position = random.choice(range(self.num_distractors))
             label = target_position
+            sender_object = receiver_input[target_position]
+            sender_input = torch.cat((speech_act_to_one_hot(speech_act), sender_object))
             receiver_input[target_position] = get_object(sender_input)
 
         elif speech_act == QUESTION_EXISTS:
-            question_content = get_object(sender_input)
+            question_content = generate_question_content(self.num_features, self.num_values)
+            sender_input = torch.cat((speech_act_to_one_hot(speech_act), question_content))
+
             label = self.label_false
             for object in receiver_input:
                 if torch.sum(object * question_content) > 0:
                     label = self.label_true
                     break
         elif speech_act == QUESTION_FORALL:
-            question_content = get_object(sender_input)
+            question_content = generate_question_content(self.num_features, self.num_values)
+            sender_input = torch.cat((speech_act_to_one_hot(speech_act), question_content))
+
             label = self.label_true
             for object in receiver_input:
                 if torch.sum(object * question_content) == 0:

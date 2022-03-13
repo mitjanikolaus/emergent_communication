@@ -490,8 +490,9 @@ class SignalingGameModule(pl.LightningModule):
         else:
             # Language analysis
             sender = self.senders[sender_idx]
-            messages, log_prob_s, entropy_s = sender(batch)
-            return batch.cpu(), messages.cpu()
+            sender_input, _, _ = batch
+            messages, log_prob_s, entropy_s = sender(sender_input)
+            return sender_input.cpu(), messages.cpu()
 
     def validation_epoch_end(self, validation_step_outputs):
         generalization_results, lang_analysis_results = validation_step_outputs
