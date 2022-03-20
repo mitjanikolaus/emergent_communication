@@ -263,7 +263,7 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         distractors = [generate_object(self.num_features, self.num_values) for _ in range(self.num_distractors)]
         receiver_input = torch.stack(distractors)
 
-        label = self.label_false
+        label = self.label_true
         for object in receiver_input:
             if torch.sum(object * question_content) == 0:
                 label = self.label_false
