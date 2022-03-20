@@ -145,6 +145,7 @@ def generate_questions(num_features, num_values, speech_act):
 
     return questions
 
+
 def generate_object(num_features, num_values):
     z = torch.zeros((num_features, num_values))
     for i in range(num_features):
@@ -207,12 +208,11 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
     def get_sample(self):
         speech_act = random.choice(self.speech_acts)
 
-        distractors = [generate_object(self.num_features, self.num_values) for _ in range(self.num_distractors)]
-        receiver_input = torch.stack(distractors)
-
         if speech_act == REQUEST:
             target_position = random.choice(range(self.num_distractors))
             label = target_position
+            distractors = [generate_object(self.num_features, self.num_values) for _ in range(self.num_distractors)]
+            receiver_input = torch.stack(distractors)
             sender_object = receiver_input[target_position]
             sender_input = torch.cat((speech_act_to_one_hot(speech_act), sender_object))
             receiver_input[target_position] = get_object(sender_input)
@@ -221,20 +221,23 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
             question_content = generate_question_content(self.num_features, self.num_values)
             sender_input = torch.cat((speech_act_to_one_hot(speech_act), question_content))
 
-            label = self.label_false
-            for object in receiver_input:
-                if torch.sum(object * question_content) > 0:
-                    label = self.label_true
-                    break
+            # Ensure uniform distribution of labels
+            label = random.choice([self.label_false, self.label_true])
+            receiver_input, l = self.generate_distractors_and_label_for_exists(question_content)
+            while l != label:
+                receiver_input, l = self.generate_distractors_and_label_for_exists(question_content)
+
+
         elif speech_act == QUESTION_FORALL:
             question_content = generate_question_content(self.num_features, self.num_values)
             sender_input = torch.cat((speech_act_to_one_hot(speech_act), question_content))
 
-            label = self.label_true
-            for object in receiver_input:
-                if torch.sum(object * question_content) == 0:
-                    label = self.label_false
-                    break
+            # Ensure uniform distribution of labels
+            label = random.choice([self.label_false, self.label_true])
+            receiver_input, l = self.generate_distractors_and_label_for_forall(question_content)
+            while l != label:
+                receiver_input, l = self.generate_distractors_and_label_for_forall(question_content)
+
         else:
             raise ValueError("Unknown speech act: ", speech_act)
 
@@ -243,3 +246,27 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
     def __iter__(self):
         while 1:
             yield self.get_sample()
+
+    def generate_distractors_and_label_for_exists(self, question_content):
+        distractors = [generate_object(self.num_features, self.num_values) for _ in range(self.num_distractors)]
+        receiver_input = torch.stack(distractors)
+
+        label = self.label_false
+        for object in receiver_input:
+            if torch.sum(object * question_content) > 0:
+                label = self.label_true
+                break
+
+        return receiver_input, label
+
+    def generate_distractors_and_label_for_forall(self, question_content):
+        distractors = [generate_object(self.num_features, self.num_values) for _ in range(self.num_distractors)]
+        receiver_input = torch.stack(distractors)
+
+        label = self.label_false
+        for object in receiver_input:
+            if torch.sum(object * question_content) == 0:
+                label = self.label_false
+                break
+
+        return receiver_input, label
