@@ -62,7 +62,7 @@ class Receiver(nn.Module):
         dots = torch.matmul(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
 
         _, (rnn_hidden_speech_act, _) = self.lstm_speech_act(packed)
-        encoded_message_speech_act = rnn_hidden[-1]
+        encoded_message_speech_act = rnn_hidden_speech_act[-1]
 
         dots_2 = torch.matmul(dots.unsqueeze(2), encoded_message_speech_act.unsqueeze(1)).reshape(batch_size, -1)
 
