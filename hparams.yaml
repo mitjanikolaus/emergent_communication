@@ -4,30 +4,30 @@ model:
   length_cost: 0.0
   max_len: 5
   num_features: 4
-  num_values: 4
+  num_values: 3
   num_senders: 1
   num_receivers: 1
   receiver_embed_dim: 128
-  receiver_num_layers: 2
+  receiver_num_layers: 1
   receiver_hidden_dim: 128
   receiver_learning_speed: 1
   sender_embed_dim: 128
   sender_entropy_coeff: 0.1
-  sender_num_layers: 2
+  sender_num_layers: 1
   sender_hidden_dim: 128
   sender_learning_speed: 1
   vocab_size: 10
   log_topsim_on_validation: false
-  log_entropy_on_validation: true
+  log_entropy_on_validation: false
 trainer:
-  val_check_interval: 1000
-  log_every_n_steps: 100
-  limit_val_batches: 100
+  val_check_interval: 100
+  log_every_n_steps: 25
+  limit_val_batches: 10
   limit_train_batches: 100000
+  num_sanity_val_steps: 3
   gpus: 0
-#  reload_dataloaders_every_n_epochs: 1
 data:
-  batch_size: 1024
+  batch_size: 512
   num_distractors: 2  # Including the target object
   test_set_size: 0.1
   num_workers: 0
