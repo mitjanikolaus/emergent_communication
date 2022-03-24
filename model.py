@@ -481,11 +481,11 @@ class SignalingGameModule(pl.LightningModule):
         if dataloader_idx == 0:
             # Generalization:
             loss, acc = self.forward(batch, sender_idx, receiver_idx)
-            return acc.float().mean().cpu()
+            return get_acc_per_speech_act(batch, acc)
         else:
             # Language analysis
             sender = self.senders[sender_idx]
-            sender_input, _, _ = batch
+            sender_input = batch
             messages, log_prob_s, entropy_s = sender(sender_input)
             return sender_input.cpu(), messages.cpu()
 
@@ -493,7 +493,8 @@ class SignalingGameModule(pl.LightningModule):
         generalization_results, lang_analysis_results = validation_step_outputs
 
         # Generalization:
-        test_acc = np.mean(generalization_results).item()
+        generalization_results = pd.DataFrame.from_records(generalization_results)
+        test_acc = generalization_results.mean().to_dict()
         self.log("test_acc", test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
 
@@ -532,5 +533,5 @@ def get_acc_per_speech_act(batch, acc):
     accs = {}
     speech_acts_batch = np.array([get_speech_act(intent) for intent in sender_input])
     for speech_act in SPEECH_ACTS:
-        accs[speech_act] = acc[speech_acts_batch == speech_act].float().mean()
+        accs[speech_act] = acc[speech_acts_batch == speech_act].float().mean().item()
     return accs
