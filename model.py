@@ -15,7 +15,7 @@ from torch.nn import ModuleList
 
 import pandas as pd
 
-from data import SPEECH_ACTS, get_speech_act
+from data import get_speech_act
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
@@ -69,6 +69,7 @@ class Receiver(nn.Module):
 class Sender(pl.LightningModule):
     def __init__(
         self,
+        speech_acts,
         n_features,
         n_values,
         vocab_size,
@@ -80,7 +81,8 @@ class Sender(pl.LightningModule):
         super(Sender, self).__init__()
         self.max_len = max_len
 
-        num_speech_acts = len(SPEECH_ACTS)
+        self.speech_acts = speech_acts
+        num_speech_acts = len(self.speech_acts)
         self.embed_input = nn.Linear(n_features*n_values+num_speech_acts, embed_dim)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
@@ -154,6 +156,7 @@ class Sender(pl.LightningModule):
 class SenderReceiver(pl.LightningModule):
     def __init__(
         self,
+        speech_acts,
         n_features,
         n_values,
         vocab_size,
@@ -164,7 +167,7 @@ class SenderReceiver(pl.LightningModule):
     ):
         super(SenderReceiver, self).__init__()
         self.max_len = max_len
-
+        self.speech_acts = speech_acts
         self.embed_input = nn.Linear(n_features*n_values, embed_dim)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
@@ -293,6 +296,7 @@ class SignalingGameModule(pl.LightningModule):
         self.num_distractors = self.hparams["data"]["num_distractors"]
         self.model_hparams = AttributeDict(self.hparams["model"])
 
+        self.speech_acts = self.model_hparams["speech_acts"]
         self.init_agents()
 
         self.sender_entropy_coeff = self.model_hparams.sender_entropy_coeff
@@ -319,7 +323,8 @@ class SignalingGameModule(pl.LightningModule):
                 raise ValueError("Symmetric game requires same number of senders and receivers.")
             self.senders = ModuleList(
                 [
-                    SenderReceiver(self.model_hparams.num_features, self.model_hparams.num_values,
+                    SenderReceiver(self.model_hparams.speech_acts,
+                        self.model_hparams.num_features, self.model_hparams.num_values,
                         self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
                         self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
                         self.model_hparams.sender_num_layers)
@@ -330,7 +335,8 @@ class SignalingGameModule(pl.LightningModule):
         else:
             self.senders = ModuleList(
                 [
-                    Sender(self.model_hparams.num_features, self.model_hparams.num_values,
+                    Sender(self.model_hparams.speech_acts,
+                        self.model_hparams.num_features, self.model_hparams.num_values,
                         self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
                         self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
                         self.model_hparams.sender_num_layers)
@@ -395,7 +401,7 @@ class SignalingGameModule(pl.LightningModule):
 
         # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-        self.log(f"speech_act_acc", get_acc_per_speech_act(batch, acc), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"speech_act_acc", get_acc_per_speech_act(batch, acc, self.speech_acts), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
@@ -481,7 +487,7 @@ class SignalingGameModule(pl.LightningModule):
         if dataloader_idx == 0:
             # Generalization:
             loss, acc = self.forward(batch, sender_idx, receiver_idx)
-            return get_acc_per_speech_act(batch, acc)
+            return get_acc_per_speech_act(batch, acc, self.speech_acts)
         else:
             # Language analysis
             sender = self.senders[sender_idx]
@@ -528,10 +534,10 @@ class SignalingGameModule(pl.LightningModule):
             print("Topsim: ", topsim)
 
 
-def get_acc_per_speech_act(batch, acc):
+def get_acc_per_speech_act(batch, acc, speech_acts):
     sender_input, _, _ = batch
     accs = {}
-    speech_acts_batch = np.array([get_speech_act(intent) for intent in sender_input])
-    for speech_act in SPEECH_ACTS:
+    speech_acts_batch = np.array([get_speech_act(intent, speech_acts) for intent in sender_input])
+    for speech_act in speech_acts:
         accs[speech_act] = acc[speech_acts_batch == speech_act].float().mean().item()
     return accs

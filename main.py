@@ -11,7 +11,8 @@ def run():
     with open("hparams.yaml") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
 
-    datamodule = SignalingGameDataModule(num_features=config["model"]["num_features"],
+    datamodule = SignalingGameDataModule(speech_acts=config["model"]["speech_acts"],
+                                         num_features=config["model"]["num_features"],
                                          num_values=config["model"]["num_values"],
                                          num_distractors=config["data"]["num_distractors"],
                                          test_set_size=config["data"]["test_set_size"],
