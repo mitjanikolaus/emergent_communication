@@ -164,6 +164,10 @@ def get_speech_act_code(intent, num_speech_acts):
     return intent[:num_speech_acts]
 
 
+def get_speech_act_codes(intents, num_speech_acts):
+    return intents[:, :num_speech_acts]
+
+
 def get_object(intent, speech_acts):
     return intent[len(speech_acts):]
 

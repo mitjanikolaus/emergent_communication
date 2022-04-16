@@ -15,7 +15,7 @@ from torch.nn import ModuleList
 
 import pandas as pd
 
-from data import get_speech_act
+from data import get_speech_act, get_speech_act_codes, get_objects
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
@@ -151,6 +151,70 @@ class Sender(pl.LightningModule):
         entropy = torch.cat([entropy, zeros], dim=1)
 
         return sequence, logits, entropy
+
+
+class OptimalSender(pl.LightningModule):
+    def __init__(
+        self,
+        speech_acts,
+        n_features,
+        n_values,
+        vocab_size,
+        max_len,
+    ):
+        super(OptimalSender, self).__init__()
+        self.max_len = max_len
+
+        self.speech_acts = speech_acts
+        self.n_features = n_features
+        self.n_values = n_values
+
+        self.vocab_size = vocab_size
+
+        assert len(speech_acts) <= n_values
+        assert n_values + 2 <= vocab_size   # +1 for case if value is not set and + 1 for EOS token
+        assert n_features + 1 <= max_len    # + 1 to encode speech act
+
+    def one_hot_to_message(self, intent_objects):
+        values = []
+        for i in range(self.n_features):
+            # Cut out relevant range for this feature
+            relevant_range = intent_objects[:, i * self.n_values:(i + 1) * self.n_values]
+            # Prepend zeros for case if feature is not set
+            zeros = torch.zeros(relevant_range.shape[0]).unsqueeze(1)
+            relevant_range = torch.cat((zeros, relevant_range), dim=1)
+
+            value = torch.argmax(relevant_range, dim=1)
+            values.append(value)
+
+        return torch.stack(values).T
+
+    def create_messages(self, intents):
+        speech_act_codes_one_hot = get_speech_act_codes(intents, len(self.speech_acts))
+        speech_act_codes = torch.nonzero(speech_act_codes_one_hot)[:, 1]
+        speech_act_codes = speech_act_codes.unsqueeze(1)
+
+        objects = get_objects(intents, len(self.speech_acts))
+        message_contents = self.one_hot_to_message(objects)
+
+        messages = torch.cat((speech_act_codes, message_contents), dim=1)
+
+        # Add 1 to avoid zeros, these are reserved as EOS token
+        messages = messages + 1
+        return messages
+
+    def forward(self, x):
+        batch_size = x.shape[0]
+
+        messages = self.create_messages(x)
+
+        zeros = torch.zeros((batch_size, 1)).type_as(x)
+
+        sequences = torch.cat([messages.long(), zeros.long()], dim=1)
+        logits = torch.zeros_like(sequences)
+        entropy = torch.zeros_like(sequences)
+
+        return sequences, logits, entropy
 
 
 class SenderReceiver(pl.LightningModule):
@@ -333,16 +397,26 @@ class SignalingGameModule(pl.LightningModule):
             )
             self.receivers = self.senders
         else:
-            self.senders = ModuleList(
-                [
-                    Sender(self.model_hparams.speech_acts,
-                        self.model_hparams.num_features, self.model_hparams.num_values,
-                        self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
-                        self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
-                        self.model_hparams.sender_num_layers)
-                    for _ in range(self.model_hparams.num_senders)
-                ]
-            )
+            if self.model_hparams.optimal_sender:
+                self.senders = ModuleList(
+                    [
+                        OptimalSender(self.model_hparams.speech_acts,
+                               self.model_hparams.num_features, self.model_hparams.num_values,
+                               self.model_hparams.vocab_size, self.model_hparams.max_len)
+                        for _ in range(self.model_hparams.num_senders)
+                    ]
+                )
+            else:
+                self.senders = ModuleList(
+                    [
+                        Sender(self.model_hparams.speech_acts,
+                               self.model_hparams.num_features, self.model_hparams.num_values,
+                               self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
+                               self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
+                               self.model_hparams.sender_num_layers)
+                        for _ in range(self.model_hparams.num_senders)
+                    ]
+                )
 
             self.receivers = ModuleList(
                 [
@@ -355,7 +429,10 @@ class SignalingGameModule(pl.LightningModule):
             )
 
     def configure_optimizers(self):
-        optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=1e-3) for sender in self.senders]
+        if self.model_hparams.optimal_sender:
+            optimizers_sender = []
+        else:
+            optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=1e-3) for sender in self.senders]
         optimizers_receiver = [torch.optim.Adam(receiver.parameters(), lr=1e-3) for receiver in self.receivers]
 
         return tuple(itertools.chain(optimizers_sender, optimizers_receiver))
@@ -376,23 +453,33 @@ class SignalingGameModule(pl.LightningModule):
             opt_receiver = optimizers[receiver_idx]
 
         else:
-            opts_sender = optimizers[:self.model_hparams.num_senders]
-            opts_receiver = optimizers[self.model_hparams.num_senders:]
-
             # Sample sender and receiver for this batch:
             sender_idx = random.choice(range(self.model_hparams.num_senders))
             receiver_idx = random.choice(range(self.model_hparams.num_receivers))
 
-            opt_sender = opts_sender[sender_idx]
-            opt_receiver = opts_receiver[receiver_idx]
+            if self.model_hparams.optimal_sender:
+                opt_sender = None
+                opts_receiver = optimizers
+                if self.model_hparams.num_receivers == 1:
+                    opt_receiver = opts_receiver
+                else:
+                    opt_receiver = opts_receiver[receiver_idx]
 
-        opt_sender.zero_grad()
+            else:
+                opts_sender = optimizers[:self.model_hparams.num_senders]
+                opts_receiver = optimizers[self.model_hparams.num_senders:]
+
+                opt_sender = opts_sender[sender_idx]
+                opt_receiver = opts_receiver[receiver_idx]
+
+        if opt_sender:
+            opt_sender.zero_grad()
         opt_receiver.zero_grad()
         loss, acc = self.forward(batch, sender_idx, receiver_idx)
         self.manual_backward(loss)
 
         perform_sender_update = torch.rand(1) < self.model_hparams.sender_learning_speed
-        if perform_sender_update:
+        if perform_sender_update and opt_sender:
             opt_sender.step()
 
         perform_receiver_update = torch.rand(1) < self.model_hparams.receiver_learning_speed
@@ -513,7 +600,7 @@ class SignalingGameModule(pl.LightningModule):
 
         meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
 
-        num_digits = int(math.log10(self.model_hparams.vocab_size))+1
+        num_digits = int(math.log10(self.model_hparams.vocab_size))
         messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
         messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)

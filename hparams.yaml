@@ -1,11 +1,12 @@
 model:
   symmetric: false
+  optimal_sender: true
   baseline_type: mean
   length_cost: 0.0
   max_len: 5
   speech_acts: [REQUEST, QUESTION_EXISTS, QUESTION_FORALL]
-  num_features: 4
-  num_values: 3
+  num_features: 5
+  num_values: 5
   num_senders: 1
   num_receivers: 1
   receiver_embed_dim: 128
