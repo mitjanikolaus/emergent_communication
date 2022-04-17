@@ -15,14 +15,14 @@ from torch.nn import ModuleList
 
 import pandas as pd
 
-from data import get_speech_act, get_speech_act_codes, get_objects
+from data import get_speech_act, get_speech_act_codes, get_objects, REQUEST
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, n_features, n_values, n_distractors, num_layers=1
+            self, vocab_size, embed_dim, hidden_size, n_features, n_values, n_distractors, speech_acts, num_layers=1
     ):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
@@ -42,6 +42,9 @@ class Receiver(nn.Module):
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
+        self.speech_acts = speech_acts
+        self.receives_requests = REQUEST in speech_acts
+
     def forward(self, batch):
         message, input, message_lengths = batch
         batch_size = message.shape[0]
@@ -59,7 +62,11 @@ class Receiver(nn.Module):
         product = torch.prod(embedded_input, dim=1).unsqueeze(1)
         summed = torch.sum(embedded_input, dim=1).unsqueeze(1)
 
-        catted = torch.cat((embedded_input, summed, product), dim=1)
+        if self.receives_requests:
+            catted = torch.cat((embedded_input, summed, product), dim=1)
+        else:
+            catted = torch.cat((summed, product), dim=1)
+
         dots = torch.matmul(catted, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
 
         softmaxed = F.softmax(dots, dim=1)
@@ -360,7 +367,7 @@ class SignalingGameModule(pl.LightningModule):
         self.num_distractors = self.hparams["data"]["num_distractors"]
         self.model_hparams = AttributeDict(self.hparams["model"])
 
-        self.speech_acts = self.model_hparams["speech_acts"]
+        self.speech_acts = self.model_hparams.speech_acts
         self.init_agents()
 
         self.sender_entropy_coeff = self.model_hparams.sender_entropy_coeff
@@ -422,7 +429,7 @@ class SignalingGameModule(pl.LightningModule):
                 [
                     Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
                                     self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
-                                    self.model_hparams.num_values, self.num_distractors,
+                                    self.model_hparams.num_values, self.num_distractors, self.model_hparams.speech_acts,
                                     self.model_hparams.receiver_num_layers)
                     for _ in range(self.model_hparams.num_receivers)
                  ]
@@ -493,16 +500,16 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
     def forward(
-        self, batch, sender_idx, receiver_idx
+        self, batch, sender_idx, receiver_idx, return_messages=False
     ):
         sender = self.senders[sender_idx]
         receiver = self.receivers[receiver_idx]
 
         sender_input, receiver_input, labels = batch
-        message, log_prob_s, entropy_s = sender(sender_input)
-        message_lengths = find_lengths(message)
+        messages, log_prob_s, entropy_s = sender(sender_input)
+        message_lengths = find_lengths(messages)
         receiver_output = receiver(
-            (message, receiver_input, message_lengths)
+            (messages, receiver_input, message_lengths)
         )
 
         acc = (receiver_output.argmax(dim=1) == labels).detach()
@@ -518,7 +525,7 @@ class SignalingGameModule(pl.LightningModule):
         # care about the rest
         effective_log_prob_s = torch.zeros(batch_size).type_as(sender_input)
 
-        for i in range(message.size(1)):
+        for i in range(messages.size(1)):
             not_eosed = (i < message_lengths).float()
             effective_entropy_s += entropy_s[:, i] * not_eosed
             effective_log_prob_s += log_prob_s[:, i] * not_eosed
@@ -550,7 +557,10 @@ class SignalingGameModule(pl.LightningModule):
             self.baselines["loss"].update(receiver_loss)
             self.baselines["length"].update(length_loss)
 
-        return optimized_loss, acc
+        if return_messages:
+            return optimized_loss, acc, messages
+        else:
+            return optimized_loss, acc
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
@@ -567,32 +577,27 @@ class SignalingGameModule(pl.LightningModule):
             self.val_epoch_receiver_idx = random.choice(range(self.model_hparams.num_receivers))
         print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
 
-    def validation_step(self, batch, batch_idx, dataloader_idx):
+    def validation_step(self, batch, batch_idx):
         sender_idx = self.val_epoch_sender_idx
         receiver_idx = self.val_epoch_receiver_idx
 
-        if dataloader_idx == 0:
-            # Generalization:
-            loss, acc = self.forward(batch, sender_idx, receiver_idx)
-            return get_acc_per_speech_act(batch, acc, self.speech_acts)
-        else:
-            # Language analysis
-            sender = self.senders[sender_idx]
-            sender_input = batch
-            messages, log_prob_s, entropy_s = sender(sender_input)
-            return sender_input.cpu(), messages.cpu()
+        _, acc, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
+        return get_acc_per_speech_act(batch, acc, self.speech_acts), messages #
 
     def validation_epoch_end(self, validation_step_outputs):
-        generalization_results, lang_analysis_results = validation_step_outputs
-
         # Generalization:
-        generalization_results = pd.DataFrame.from_records(generalization_results)
+        accs = [acc for acc, _ in validation_step_outputs]
+        generalization_results = pd.DataFrame.from_records(accs)
         test_acc = generalization_results.mean().to_dict()
         self.log("test_acc", test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
 
         # Language analysis
-        self.analyze_language(lang_analysis_results)
+        messages = torch.cat([msg for _, msg in validation_step_outputs])
+        num_unique_messages = len(messages.unique(dim=0))
+        self.log("num_unique_messages", float(num_unique_messages), prog_bar=True, logger=True)
+        print("num_unique_messages: ", num_unique_messages)
+        # self.analyze_language(lang_analysis_results)
 
     def analyze_language(self, lang_analysis_results):
         meanings = torch.cat([meaning for meaning, message in lang_analysis_results])

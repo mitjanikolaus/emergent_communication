@@ -14,36 +14,37 @@ QUESTION_FORALL = "QUESTION_FORALL"
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, speech_acts, num_features, num_values, num_distractors, test_set_size, batch_size, num_workers):
+    def __init__(self, speech_acts, num_features, num_values, num_distractors, max_num_objects, test_set_size, batch_size, num_workers):
         super().__init__()
         self.speech_acts = speech_acts
         self.num_features = num_features
         self.num_values = num_values
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.max_num_objects = max_num_objects
+
+        objects = generate_objects(num_features, num_values, max_num_objects)
+        objects_train, objects_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
+        print(f"Num objects in train: ", len(objects_train))
+        print(f"Num objects in test: ", len(objects_test))
 
         self.train_data = dict()
         self.test_data = dict()
         for speech_act in self.speech_acts:
             if speech_act == REQUEST:
-                objects = generate_objects(num_features, num_values)
+                data_train = objects_train
+                data_test = objects_test
             elif speech_act == QUESTION_FORALL or speech_act == QUESTION_EXISTS:
-                objects = generate_question_contents(num_features, num_values)
+                data_train = generate_question_contents(num_features, num_values)
+                data_test = data_train
             else:
                 raise ValueError(f"Unknown speech act: {speech_act}")
 
-            data_train, data_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
-
-            print(f"[{speech_act}] Num meanings in train: ", len(data_train))
-            print(f"[{speech_act}] Num meanings in test: ", len(data_test))
             self.train_data[speech_act] = data_train
             self.test_data[speech_act] = data_test
 
-        self.language_analysis_dataset = SignalingGameLangAnalysisDataset(speech_acts, num_features, num_values)
-
-        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, num_distractors)
-        self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, num_distractors)
-
+        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, objects_train, num_distractors)
+        self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, objects_test, num_distractors)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset_discrimination, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -51,9 +52,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         generalization_dataloader = DataLoader(self.test_dataset_discrimination, batch_size=self.batch_size,
                                                num_workers=self.num_workers)
-        language_analysis_dataloader = DataLoader(self.language_analysis_dataset, batch_size=self.batch_size,
-                                                  num_workers=self.num_workers)
-        return generalization_dataloader, language_analysis_dataloader
+        return generalization_dataloader
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
         if dataloader_idx == 0:
@@ -68,17 +67,24 @@ class SignalingGameDataModule(pl.LightningDataModule):
             return sender_input
 
 
-def generate_objects(num_features, num_values):
-    inputs = itertools.product(range(num_values), repeat=num_features)
+def generate_objects(num_features, num_values, max_num_objects):
+    samples = set()
+    if num_values**num_features < max_num_objects:
+        inputs = itertools.product(range(num_values), repeat=num_features)
+        for input in inputs:
+            z = torch.zeros((num_features, num_values))
+            for i in range(num_features):
+                z[i, input[i]] = 1
+            samples.add(z.view(-1))
+    else:
+        while len(samples) < max_num_objects:
+            z = torch.zeros((num_features, num_values))
+            for i in range(num_features):
+                value = random.choice(range(num_values))
+                z[i, value] = 1
+            samples.add(z.view(-1))
 
-    samples = []
-    for input in inputs:
-        z = torch.zeros((num_features, num_values))
-        for i in range(num_features):
-            z[i, input[i]] = 1
-        samples.append(z.view(-1))
-
-    return samples
+    return list(samples)
 
 
 class SignalingGameDataset(Dataset):
@@ -142,9 +148,9 @@ def generate_question_content(num_features, num_values):
 
 
 class SignalingGameLangAnalysisDataset(Dataset):
-    def __init__(self, speech_acts, num_features, num_values):
+    def __init__(self, speech_acts, data, objects):
         self.speech_acts = speech_acts
-        self.objects = generate_objects(num_features, num_values)
+        self.objects = objects
         self.intents = generate_requests(self.objects, self.speech_acts)
 
     def __len__(self):
@@ -195,14 +201,17 @@ def generate_requests(objects, speech_acts):
 
 class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
-    def __init__(self, speech_acts, datasets, num_distractors):
+    def __init__(self, speech_acts, datasets, objects, num_distractors):
         self.speech_acts = speech_acts
-        self.label_true = num_distractors
-        self.label_false = num_distractors + 1
+        if REQUEST in speech_acts:
+            self.label_true = num_distractors
+            self.label_false = num_distractors + 1
+        else:
+            self.label_true = 0
+            self.label_false = 1
         self.num_distractors = num_distractors
         self.datasets = datasets
-        self.object_dataset = self.datasets[REQUEST]
-        self.speech_acts = list(self.datasets.keys())
+        self.object_dataset = objects
 
     def get_sample(self):
         speech_act = random.choice(self.speech_acts)

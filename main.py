@@ -15,6 +15,7 @@ def run():
                                          num_features=config["model"]["num_features"],
                                          num_values=config["model"]["num_values"],
                                          num_distractors=config["data"]["num_distractors"],
+                                         max_num_objects=config["data"]["max_num_objects"],
                                          test_set_size=config["data"]["test_set_size"],
                                          batch_size=config["data"]["batch_size"],
                                          num_workers=config["data"]["num_workers"])
