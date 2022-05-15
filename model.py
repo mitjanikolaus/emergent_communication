@@ -33,12 +33,6 @@ class Receiver(nn.Module):
             hidden_size=hidden_size,
             num_layers=num_layers,
         )
-        self.lstm_speech_act = nn.LSTM(
-            input_size=embed_dim,
-            batch_first=True,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-        )
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
@@ -58,12 +52,9 @@ class Receiver(nn.Module):
         _, (rnn_hidden, _) = self.lstm(packed)
         encoded_message = rnn_hidden[-1]
 
-        _, (rnn_hidden_speech_act, _) = self.lstm(packed)
-        encoded_message_speech_act = rnn_hidden_speech_act[-1]
-
         embedded_input = self.fc1(input)
 
-        attn_weights = F.softmax(self.attn(encoded_message_speech_act), dim=1)
+        attn_weights = F.softmax(self.attn(encoded_message), dim=1)
 
         embedded_input = embedded_input.tanh()
 
