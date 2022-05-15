@@ -4,7 +4,7 @@ model:
   baseline_type: mean
   length_cost: 0.0
   max_len: 5
-  speech_acts: [QUESTION_EXISTS]
+  speech_acts: [REQUEST, QUESTION_EXISTS]
   num_features: 4
   num_values: 3
   num_senders: 1

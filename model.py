@@ -45,6 +45,8 @@ class Receiver(nn.Module):
         self.speech_acts = speech_acts
         self.receives_requests = REQUEST in speech_acts
 
+        self.attn = nn.Linear(hidden_size, n_distractors + 2)
+
     def forward(self, batch):
         message, input, message_lengths = batch
         batch_size = message.shape[0]
@@ -56,7 +58,13 @@ class Receiver(nn.Module):
         _, (rnn_hidden, _) = self.lstm(packed)
         encoded_message = rnn_hidden[-1]
 
+        _, (rnn_hidden_speech_act, _) = self.lstm(packed)
+        encoded_message_speech_act = rnn_hidden_speech_act[-1]
+
         embedded_input = self.fc1(input)
+
+        attn_weights = F.softmax(self.attn(encoded_message_speech_act), dim=1)
+
         embedded_input = embedded_input.tanh()
 
         product = torch.prod(embedded_input, dim=1).unsqueeze(1)
@@ -69,7 +77,9 @@ class Receiver(nn.Module):
 
         dots = torch.matmul(catted, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
 
-        softmaxed = F.softmax(dots, dim=1)
+        output = attn_weights * dots
+
+        softmaxed = F.softmax(output, dim=1)
         return softmaxed
 
 
