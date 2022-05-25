@@ -203,12 +203,8 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
     def __init__(self, speech_acts, datasets, objects, num_distractors):
         self.speech_acts = speech_acts
-        if REQUEST in speech_acts:
-            self.label_true = num_distractors
-            self.label_false = num_distractors + 1
-        else:
-            self.label_true = 0
-            self.label_false = 1
+        self.label_true = num_distractors
+        self.label_false = num_distractors + 1
         self.num_distractors = num_distractors
         self.datasets = datasets
         self.object_dataset = objects

@@ -37,13 +37,15 @@ class Receiver(nn.Module):
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
         self.speech_acts = speech_acts
-        self.receives_requests = REQUEST in speech_acts
 
-        self.attn = nn.Linear(hidden_size, n_distractors + 2)
+        self.linear_out = nn.Linear(n_distractors, n_distractors + 2)
+
+        self.linear_speech_act = nn.Linear(hidden_size, 2)
 
     def forward(self, batch):
         message, input, message_lengths = batch
         batch_size = message.shape[0]
+        n_distractors = input.shape[1]
         emb = self.embedding(message)
 
         packed = nn.utils.rnn.pack_padded_sequence(
@@ -54,24 +56,19 @@ class Receiver(nn.Module):
 
         embedded_input = self.fc1(input)
 
-        attn_weights = F.softmax(self.attn(encoded_message), dim=1)
-
         embedded_input = embedded_input.tanh()
 
-        product = torch.prod(embedded_input, dim=1).unsqueeze(1)
-        summed = torch.sum(embedded_input, dim=1).unsqueeze(1)
+        output = torch.bmm(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
 
-        if self.receives_requests:
-            catted = torch.cat((embedded_input, summed, product), dim=1)
-        else:
-            catted = torch.cat((summed, product), dim=1)
+        output = self.linear_out(output)
 
-        dots = torch.matmul(catted, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
+        softmax_speech_act = F.softmax(self.linear_speech_act(encoded_message))
 
-        output = attn_weights * dots
+        speech_act_factor = torch.cat([softmax_speech_act[:, :1].repeat(1, n_distractors), softmax_speech_act[:,1:].repeat(1, 2)], dim=1)
+        output = speech_act_factor * output
 
         softmaxed = F.softmax(output, dim=1)
-        return softmaxed
+        return softmaxed, softmax_speech_act
 
 
 class Sender(pl.LightningModule):
@@ -84,6 +81,7 @@ class Sender(pl.LightningModule):
         embed_dim,
         hidden_size,
         max_len,
+        layer_norm,
         num_layers=1,
     ):
         super(Sender, self).__init__()
@@ -109,7 +107,7 @@ class Sender(pl.LightningModule):
                 for i in range(self.num_layers)
             ]
         )
-        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.layer_norm = nn.LayerNorm(hidden_size) if layer_norm else None
 
     def forward(self, x):
         batch_size = x.shape[0]
@@ -133,7 +131,8 @@ class Sender(pl.LightningModule):
                 input = h_t
 
             # TODO: use actual layer norm LSTM cell
-            h_t = self.layer_norm(h_t)
+            if self.layer_norm is not None:
+                h_t = self.layer_norm(h_t)
 
             step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
             distr = Categorical(logits=step_logits)
@@ -235,6 +234,7 @@ class SenderReceiver(pl.LightningModule):
         embed_dim,
         hidden_size,
         max_len,
+        layer_norm,
         num_layers=1,
     ):
         super(SenderReceiver, self).__init__()
@@ -258,7 +258,7 @@ class SenderReceiver(pl.LightningModule):
                 for i in range(self.num_layers)
             ]
         )
-        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.layer_norm = nn.LayerNorm(hidden_size) if layer_norm else None
 
     def forward(self, batch):
         if isinstance(batch, tuple):
@@ -288,7 +288,8 @@ class SenderReceiver(pl.LightningModule):
                 input = h_t
 
             # TODO: use actual layer norm LSTM cell
-            h_t = self.layer_norm(h_t)
+            if self.layer_norm is not None:
+                h_t = self.layer_norm(h_t)
 
             step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
             distr = Categorical(logits=step_logits)
@@ -341,7 +342,8 @@ class SenderReceiver(pl.LightningModule):
                     input = h_t
 
                 # TODO: use actual layer norm LSTM cell
-                h_t = self.layer_norm(h_t)
+                if self.layer_norm is not None:
+                    h_t = self.layer_norm(h_t)
 
                 step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
                 # TODO: EOS handling?
@@ -399,7 +401,7 @@ class SignalingGameModule(pl.LightningModule):
                         self.model_hparams.num_features, self.model_hparams.num_values,
                         self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
                         self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
-                        self.model_hparams.sender_num_layers)
+                        self.model_hparams.sender_layer_norm, self.model_hparams.sender_num_layers)
                     for _ in range(self.model_hparams.num_senders * 2)
                 ]
             )
@@ -421,7 +423,7 @@ class SignalingGameModule(pl.LightningModule):
                                self.model_hparams.num_features, self.model_hparams.num_values,
                                self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
                                self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
-                               self.model_hparams.sender_num_layers)
+                               self.model_hparams.sender_layer_norm, self.model_hparams.sender_num_layers)
                         for _ in range(self.model_hparams.num_senders)
                     ]
                 )
@@ -483,7 +485,7 @@ class SignalingGameModule(pl.LightningModule):
         if opt_sender:
             opt_sender.zero_grad()
         opt_receiver.zero_grad()
-        loss, acc = self.forward(batch, sender_idx, receiver_idx)
+        loss, acc, acc_speech_act = self.forward(batch, sender_idx, receiver_idx)
         self.manual_backward(loss)
 
         perform_sender_update = torch.rand(1) < self.model_hparams.sender_learning_speed
@@ -496,6 +498,8 @@ class SignalingGameModule(pl.LightningModule):
 
         # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"train_acc_speech_act", acc_speech_act.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+
         self.log(f"speech_act_acc", get_acc_per_speech_act(batch, acc, self.speech_acts), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
@@ -509,14 +513,20 @@ class SignalingGameModule(pl.LightningModule):
         sender_input, receiver_input, labels = batch
         messages, log_prob_s, entropy_s = sender(sender_input)
         message_lengths = find_lengths(messages)
-        receiver_output = receiver(
+        receiver_output, receiver_out_speech_act = receiver(
             (messages, receiver_input, message_lengths)
         )
 
         acc = (receiver_output.argmax(dim=1) == labels).detach()
-
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
+
+        labels_speech_act = torch.tensor(labels >= self.num_distractors, dtype=torch.long)
+        acc_speech_act = (receiver_out_speech_act.argmax(dim=1) == labels_speech_act).detach()
+
+        receiver_speech_act_loss = F.cross_entropy(receiver_out_speech_act, labels_speech_act, reduction='none')
+        receiver_loss += receiver_speech_act_loss
+
         assert len(receiver_loss) == batch_size
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
@@ -559,9 +569,9 @@ class SignalingGameModule(pl.LightningModule):
             self.baselines["length"].update(length_loss)
 
         if return_messages:
-            return optimized_loss, acc, messages
+            return optimized_loss, acc, acc_speech_act, messages
         else:
-            return optimized_loss, acc
+            return optimized_loss, acc, acc_speech_act
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
@@ -582,7 +592,7 @@ class SignalingGameModule(pl.LightningModule):
         sender_idx = self.val_epoch_sender_idx
         receiver_idx = self.val_epoch_receiver_idx
 
-        _, acc, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
+        _, acc, acc_speech_act, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
         return get_acc_per_speech_act(batch, acc, self.speech_acts), messages #
 
     def validation_epoch_end(self, validation_step_outputs):

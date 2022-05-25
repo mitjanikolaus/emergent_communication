@@ -6,7 +6,7 @@ model:
   max_len: 5
   speech_acts: [REQUEST, QUESTION_EXISTS]
   num_features: 4
-  num_values: 3
+  num_values: 4
   num_senders: 1
   num_receivers: 1
   receiver_embed_dim: 128
@@ -16,6 +16,7 @@ model:
   sender_embed_dim: 128
   sender_entropy_coeff: 0.1
   sender_num_layers: 1
+  sender_layer_norm: false
   sender_hidden_dim: 128
   sender_learning_speed: 1
   vocab_size: 10
