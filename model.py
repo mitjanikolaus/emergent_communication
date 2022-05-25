@@ -22,17 +22,22 @@ from utils import MeanBaseline, find_lengths, NoBaseline
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, n_features, n_values, n_distractors, speech_acts, num_layers=1
+            self, vocab_size, embed_dim, hidden_size, n_features, n_values, n_distractors, speech_acts, layer_norm, num_layers=1
     ):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
 
-        self.lstm = nn.LSTM(
-            input_size=embed_dim,
-            batch_first=True,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.cells = nn.ModuleList(
+            [
+                nn.LSTMCell(input_size=embed_dim, hidden_size=hidden_size)
+                if i == 0
+                else nn.LSTMCell(input_size=hidden_size, hidden_size=hidden_size)
+                for i in range(num_layers)
+            ]
         )
+        self.layer_norm = nn.LayerNorm(hidden_size) if layer_norm else None
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
@@ -46,13 +51,30 @@ class Receiver(nn.Module):
         message, input, message_lengths = batch
         batch_size = message.shape[0]
         n_distractors = input.shape[1]
-        emb = self.embedding(message)
+        embedded_message = self.embedding(message)
 
-        packed = nn.utils.rnn.pack_padded_sequence(
-            emb, message_lengths.cpu(), batch_first=True, enforce_sorted=False
-        )
-        _, (rnn_hidden, _) = self.lstm(packed)
-        encoded_message = rnn_hidden[-1]
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
+        prev_c = [
+            torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)
+        ]
+
+        max_message_len = embedded_message.shape[1]
+        hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
+        for step in range(max_message_len):
+            lstm_input = embedded_message[:, step]
+            for i, layer in enumerate(self.cells):
+                h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
+                prev_c[i] = c_t
+                prev_hidden[i] = h_t
+                lstm_input = h_t
+
+            # TODO: use actual layer norm LSTM cell
+            if self.layer_norm is not None:
+                h_t = self.layer_norm(h_t)
+
+            hidden_states[:, step] = h_t
+
+        encoded_message = hidden_states[range(batch_size), message_lengths-1]
 
         embedded_input = self.fc1(input)
 
@@ -113,7 +135,6 @@ class Sender(pl.LightningModule):
         batch_size = x.shape[0]
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)]
-
         prev_c = [
             torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)
         ]
@@ -234,7 +255,8 @@ class SenderReceiver(pl.LightningModule):
         embed_dim,
         hidden_size,
         max_len,
-        layer_norm,
+        sender_layer_norm,
+        receiver_layer_norm,
         num_layers=1,
     ):
         super(SenderReceiver, self).__init__()
@@ -258,7 +280,9 @@ class SenderReceiver(pl.LightningModule):
                 for i in range(self.num_layers)
             ]
         )
-        self.layer_norm = nn.LayerNorm(hidden_size) if layer_norm else None
+        self.sender_layer_norm = nn.LayerNorm(hidden_size) if sender_layer_norm else None
+        self.receiver_layer_norm = nn.LayerNorm(hidden_size) if receiver_layer_norm else None
+
 
     def forward(self, batch):
         if isinstance(batch, tuple):
@@ -288,8 +312,8 @@ class SenderReceiver(pl.LightningModule):
                 input = h_t
 
             # TODO: use actual layer norm LSTM cell
-            if self.layer_norm is not None:
-                h_t = self.layer_norm(h_t)
+            if self.sender_layer_norm is not None:
+                h_t = self.sender_layer_norm(h_t)
 
             step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
             distr = Categorical(logits=step_logits)
@@ -342,8 +366,8 @@ class SenderReceiver(pl.LightningModule):
                     input = h_t
 
                 # TODO: use actual layer norm LSTM cell
-                if self.layer_norm is not None:
-                    h_t = self.layer_norm(h_t)
+                if self.receiver_layer_norm is not None:
+                    h_t = self.receiver_layer_norm(h_t)
 
                 step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
                 # TODO: EOS handling?
@@ -401,7 +425,8 @@ class SignalingGameModule(pl.LightningModule):
                         self.model_hparams.num_features, self.model_hparams.num_values,
                         self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
                         self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
-                        self.model_hparams.sender_layer_norm, self.model_hparams.sender_num_layers)
+                        self.model_hparams.sender_layer_norm, self.model_hparams.receiver_layer_norm,
+                        self.model_hparams.sender_num_layers)
                     for _ in range(self.model_hparams.num_senders * 2)
                 ]
             )
@@ -433,7 +458,7 @@ class SignalingGameModule(pl.LightningModule):
                     Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
                                     self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
                                     self.model_hparams.num_values, self.num_distractors, self.model_hparams.speech_acts,
-                                    self.model_hparams.receiver_num_layers)
+                                    self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
                     for _ in range(self.model_hparams.num_receivers)
                  ]
             )
@@ -502,7 +527,7 @@ class SignalingGameModule(pl.LightningModule):
 
         self.log(f"speech_act_acc", get_acc_per_speech_act(batch, acc, self.speech_acts), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        # self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
     def forward(
         self, batch, sender_idx, receiver_idx, return_messages=False
@@ -513,6 +538,8 @@ class SignalingGameModule(pl.LightningModule):
         sender_input, receiver_input, labels = batch
         messages, log_prob_s, entropy_s = sender(sender_input)
         message_lengths = find_lengths(messages)
+        self.log(f"message_lengths", message_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+
         receiver_output, receiver_out_speech_act = receiver(
             (messages, receiver_input, message_lengths)
         )

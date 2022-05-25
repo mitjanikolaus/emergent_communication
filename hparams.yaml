@@ -16,7 +16,8 @@ model:
   sender_embed_dim: 128
   sender_entropy_coeff: 0.1
   sender_num_layers: 1
-  sender_layer_norm: false
+  receiver_layer_norm: true
+  sender_layer_norm: true
   sender_hidden_dim: 128
   sender_learning_speed: 1
   vocab_size: 10
