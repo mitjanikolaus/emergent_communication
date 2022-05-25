@@ -15,7 +15,7 @@ from torch.nn import ModuleList
 
 import pandas as pd
 
-from data import get_speech_act, get_speech_act_codes, get_objects, REQUEST
+from data import get_speech_act, get_speech_act_codes, get_objects
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
@@ -62,13 +62,13 @@ class Receiver(nn.Module):
 
         output = self.linear_out(output)
 
-        softmax_speech_act = F.softmax(self.linear_speech_act(encoded_message))
+        speech_act_out = self.linear_speech_act(encoded_message)
+        softmax_speech_act = F.softmax(speech_act_out)
 
         speech_act_factor = torch.cat([softmax_speech_act[:, :1].repeat(1, n_distractors), softmax_speech_act[:,1:].repeat(1, 2)], dim=1)
         output = speech_act_factor * output
 
-        softmaxed = F.softmax(output, dim=1)
-        return softmaxed, softmax_speech_act
+        return output, speech_act_out
 
 
 class Sender(pl.LightningModule):
@@ -520,11 +520,14 @@ class SignalingGameModule(pl.LightningModule):
         acc = (receiver_output.argmax(dim=1) == labels).detach()
         batch_size = sender_input.shape[0]
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
+        self.log(f"receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         labels_speech_act = torch.tensor(labels >= self.num_distractors, dtype=torch.long)
         acc_speech_act = (receiver_out_speech_act.argmax(dim=1) == labels_speech_act).detach()
 
         receiver_speech_act_loss = F.cross_entropy(receiver_out_speech_act, labels_speech_act, reduction='none')
+        self.log(f"receiver_speech_act_loss", receiver_speech_act_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+
         receiver_loss += receiver_speech_act_loss
 
         assert len(receiver_loss) == batch_size
@@ -546,6 +549,9 @@ class SignalingGameModule(pl.LightningModule):
             effective_entropy_s.mean() * self.sender_entropy_coeff
         )
 
+        self.log(f"effective_log_prob_s", effective_log_prob_s.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"weighted_entropy", weighted_entropy.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+
         log_prob = effective_log_prob_s
 
         length_loss = message_lengths.float() * self.length_cost
@@ -558,6 +564,9 @@ class SignalingGameModule(pl.LightningModule):
         policy_loss = (
             (receiver_loss.detach() - loss_baseline) * log_prob
         ).mean()
+
+        self.log(f"policy_loss", policy_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"policy_length_loss", policy_length_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         optimized_loss = policy_length_loss + policy_loss - weighted_entropy
 
