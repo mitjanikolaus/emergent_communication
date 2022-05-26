@@ -48,6 +48,7 @@ class LayerNormLSTMCell(jit.ScriptModule):
 
         return hy, cy
 
+
 class Receiver(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, n_features, n_values, n_distractors, speech_acts, layer_norm, num_layers=1
@@ -71,7 +72,8 @@ class Receiver(nn.Module):
 
         self.speech_acts = speech_acts
 
-        self.linear_out = nn.Linear(n_distractors, n_distractors + 2)
+        self.attn = nn.Linear(hidden_size, (n_distractors + 2) * 2)
+        # self.linear_out = nn.Linear(n_distractors, n_distractors + 2)
 
         self.linear_speech_act = nn.Linear(hidden_size, 2)
 
@@ -106,7 +108,9 @@ class Receiver(nn.Module):
 
         output = torch.bmm(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
 
-        output = self.linear_out(output)
+        attn_weights = F.softmax(self.attn(encoded_message).reshape(batch_size, -1, n_distractors), dim=-1)
+        output = torch.bmm(attn_weights, output.unsqueeze(2)).squeeze()
+        # output = self.linear_out(output)
 
         speech_act_out = self.linear_speech_act(encoded_message)
         softmax_speech_act = F.softmax(speech_act_out, dim=-1)
