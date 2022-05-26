@@ -31,7 +31,6 @@ trainer:
   limit_train_batches: 100000
   num_sanity_val_steps: 3
   gpus: 0
-  deterministic: true
 data:
   max_num_objects: 100000
   batch_size: 512
