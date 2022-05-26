@@ -3,6 +3,7 @@ from argparse import Namespace
 
 import yaml
 import pytorch_lightning as pl
+from pytorch_lightning import seed_everything
 
 from data import SignalingGameDataModule
 from model import SignalingGameModule
@@ -12,6 +13,7 @@ def run(args):
     with open(args.hparams) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
 
+    seed_everything(config["seed"], workers=True)
     datamodule = SignalingGameDataModule(speech_acts=config["model"]["speech_acts"],
                                          num_features=config["model"]["num_features"],
                                          num_values=config["model"]["num_values"],

@@ -1,10 +1,11 @@
+seed: 1
 model:
   symmetric: false
   optimal_sender: false
   baseline_type: mean
   length_cost: 0.0
   max_len: 5
-  speech_acts: [REQUEST, QUESTION_EXISTS]
+  speech_acts: [QUESTION_EXISTS]
   num_features: 4
   num_values: 4
   num_senders: 1
@@ -30,6 +31,7 @@ trainer:
   limit_train_batches: 100000
   num_sanity_val_steps: 3
   gpus: 0
+  deterministic: true
 data:
   max_num_objects: 100000
   batch_size: 512

@@ -109,7 +109,7 @@ class Receiver(nn.Module):
         output = self.linear_out(output)
 
         speech_act_out = self.linear_speech_act(encoded_message)
-        softmax_speech_act = F.softmax(speech_act_out)
+        softmax_speech_act = F.softmax(speech_act_out, dim=-1)
 
         speech_act_factor = torch.cat([softmax_speech_act[:, :1].repeat(1, n_distractors), softmax_speech_act[:,1:].repeat(1, 2)], dim=1)
         output = speech_act_factor * output
@@ -564,7 +564,8 @@ class SignalingGameModule(pl.LightningModule):
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
         self.log(f"receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        labels_speech_act = torch.tensor(labels >= self.num_distractors, dtype=torch.long)
+        labels_speech_act = labels.clone().detach() >= self.num_distractors
+        labels_speech_act = labels_speech_act.type(torch.long)
         acc_speech_act = (receiver_out_speech_act.argmax(dim=1) == labels_speech_act).detach()
 
         receiver_speech_act_loss = F.cross_entropy(receiver_out_speech_act, labels_speech_act, reduction='none')
