@@ -6,12 +6,11 @@ from collections import defaultdict
 import numpy as np
 import torch
 from pytorch_lightning.utilities import AttributeDict
-from torch import nn
+from torch import nn, jit
 import torch.nn.functional as F
 from torch.distributions import Categorical
 import pytorch_lightning as pl
-from torch.nn import ModuleList
-
+from torch.nn import ModuleList, Parameter
 
 import pandas as pd
 
@@ -19,6 +18,35 @@ from data import get_speech_act, get_speech_act_codes, get_objects
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
+
+class LayerNormLSTMCell(jit.ScriptModule):
+    def __init__(self, input_size, hidden_size):
+        super(LayerNormLSTMCell, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.weight_ih = Parameter(torch.randn(4 * hidden_size, input_size))
+        self.weight_hh = Parameter(torch.randn(4 * hidden_size, hidden_size))
+
+        self.layernorm_i = nn.LayerNorm(4 * hidden_size)
+        self.layernorm_h = nn.LayerNorm(4 * hidden_size)
+        self.layernorm_c = nn.LayerNorm(hidden_size)
+
+    def forward(self, input, state):
+        hx, cx = state
+        igates = self.layernorm_i(torch.mm(input, self.weight_ih.t()))
+        hgates = self.layernorm_h(torch.mm(hx, self.weight_hh.t()))
+        gates = igates + hgates
+        ingate, forgetgate, cellgate, outgate = gates.chunk(4, 1)
+
+        ingate = torch.sigmoid(ingate)
+        forgetgate = torch.sigmoid(forgetgate)
+        cellgate = torch.tanh(cellgate)
+        outgate = torch.sigmoid(outgate)
+
+        cy = self.layernorm_c((forgetgate * cx) + (ingate * cellgate))
+        hy = outgate * torch.tanh(cy)
+
+        return hy, cy
 
 class Receiver(nn.Module):
     def __init__(
@@ -29,15 +57,15 @@ class Receiver(nn.Module):
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+        lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
         self.cells = nn.ModuleList(
             [
-                nn.LSTMCell(input_size=embed_dim, hidden_size=hidden_size)
+                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else nn.LSTMCell(input_size=hidden_size, hidden_size=hidden_size)
+                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(num_layers)
             ]
         )
-        self.layer_norm = nn.LayerNorm(hidden_size) if layer_norm else None
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
@@ -67,10 +95,6 @@ class Receiver(nn.Module):
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 lstm_input = h_t
-
-            # TODO: use actual layer norm LSTM cell
-            if self.layer_norm is not None:
-                h_t = self.layer_norm(h_t)
 
             hidden_states[:, step] = h_t
 
@@ -121,15 +145,16 @@ class Sender(pl.LightningModule):
         self.vocab_size = vocab_size
         self.num_layers = num_layers
 
+        lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
+
         self.cells = nn.ModuleList(
             [
-                nn.LSTMCell(input_size=embed_dim, hidden_size=hidden_size)
+                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else nn.LSTMCell(input_size=hidden_size, hidden_size=hidden_size)
+                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
-        self.layer_norm = nn.LayerNorm(hidden_size) if layer_norm else None
 
     def forward(self, x):
         batch_size = x.shape[0]
@@ -150,10 +175,6 @@ class Sender(pl.LightningModule):
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 input = h_t
-
-            # TODO: use actual layer norm LSTM cell
-            if self.layer_norm is not None:
-                h_t = self.layer_norm(h_t)
 
             step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
             distr = Categorical(logits=step_logits)
@@ -272,16 +293,18 @@ class SenderReceiver(pl.LightningModule):
         self.vocab_size = vocab_size
         self.num_layers = num_layers
 
+        if sender_layer_norm != receiver_layer_norm:
+            raise ValueError("Joint Sender and Receiver requires both sender_layer_norm and receiver_layer_norm to be "
+                             "set to true or false at the same time")
+        lstm_cell = LayerNormLSTMCell if sender_layer_norm else nn.LSTMCell
         self.cells = nn.ModuleList(
             [
-                nn.LSTMCell(input_size=embed_dim, hidden_size=hidden_size)
+                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else nn.LSTMCell(input_size=hidden_size, hidden_size=hidden_size)
+                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
-        self.sender_layer_norm = nn.LayerNorm(hidden_size) if sender_layer_norm else None
-        self.receiver_layer_norm = nn.LayerNorm(hidden_size) if receiver_layer_norm else None
 
 
     def forward(self, batch):
@@ -310,10 +333,6 @@ class SenderReceiver(pl.LightningModule):
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 input = h_t
-
-            # TODO: use actual layer norm LSTM cell
-            if self.sender_layer_norm is not None:
-                h_t = self.sender_layer_norm(h_t)
 
             step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
             distr = Categorical(logits=step_logits)
@@ -364,10 +383,6 @@ class SenderReceiver(pl.LightningModule):
                     prev_c[i] = c_t
                     prev_hidden[i] = h_t
                     input = h_t
-
-                # TODO: use actual layer norm LSTM cell
-                if self.receiver_layer_norm is not None:
-                    h_t = self.receiver_layer_norm(h_t)
 
                 step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
                 # TODO: EOS handling?
