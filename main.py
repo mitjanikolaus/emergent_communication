@@ -1,3 +1,4 @@
+import argparse
 from argparse import Namespace
 
 import yaml
@@ -7,8 +8,8 @@ from data import SignalingGameDataModule
 from model import SignalingGameModule
 
 
-def run():
-    with open("hparams.yaml") as f:
+def run(args):
+    with open(args.hparams) as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
 
     datamodule = SignalingGameDataModule(speech_acts=config["model"]["speech_acts"],
@@ -32,6 +33,14 @@ def run():
     trainer.fit(model, datamodule)
 
 
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--hparams", type=str, default="hparams.yaml")
+
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
-    run()
+    args = get_args()
+    run(args)
 
