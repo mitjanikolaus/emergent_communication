@@ -51,7 +51,7 @@ class LayerNormLSTMCell(jit.ScriptModule):
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, n_features, n_values, num_objects, speech_acts, layer_norm, num_layers=1
+            self, vocab_size, embed_dim, hidden_size, n_features, n_values, num_objects, speech_acts, layer_norm, num_layers
     ):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
@@ -568,14 +568,14 @@ class SignalingGameModule(pl.LightningModule):
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
         self.log(f"receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        labels_speech_act = labels.clone().detach() >= self.num_objects
-        labels_speech_act = labels_speech_act.type(torch.long)
-        acc_speech_act = (receiver_out_speech_act.argmax(dim=1) == labels_speech_act).detach()
+        if self.model_hparams["receiver_aux_loss"]:
+            labels_speech_act = labels.clone().detach() >= self.num_objects
+            labels_speech_act = labels_speech_act.type(torch.long)
+            acc_speech_act = (receiver_out_speech_act.argmax(dim=1) == labels_speech_act).detach()
+            receiver_speech_act_loss = F.cross_entropy(receiver_out_speech_act, labels_speech_act, reduction='none')
+            self.log(f"receiver_speech_act_loss", receiver_speech_act_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        receiver_speech_act_loss = F.cross_entropy(receiver_out_speech_act, labels_speech_act, reduction='none')
-        self.log(f"receiver_speech_act_loss", receiver_speech_act_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-
-        receiver_loss += receiver_speech_act_loss
+            receiver_loss += receiver_speech_act_loss
 
         assert len(receiver_loss) == batch_size
 

@@ -14,6 +14,7 @@ model:
   receiver_num_layers: 1
   receiver_hidden_dim: 128
   receiver_learning_speed: 1
+  receiver_aux_loss: true
   sender_embed_dim: 128
   sender_entropy_coeff: 0.1
   sender_num_layers: 1
@@ -34,6 +35,6 @@ trainer:
 data:
   max_num_objects: 100000
   batch_size: 512
-  num_objects: 2
+  num_objects: 3
   test_set_size: 0.1
   num_workers: 0
