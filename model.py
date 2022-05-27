@@ -72,7 +72,7 @@ class Receiver(nn.Module):
 
         self.speech_acts = speech_acts
 
-        self.linear_out = nn.Linear(3, 4)
+        self.linear_out = nn.Linear(num_objects+1, num_objects+2)
 
         self.linear_speech_act = nn.Linear(hidden_size, 2)
 
