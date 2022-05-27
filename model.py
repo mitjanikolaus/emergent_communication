@@ -72,8 +72,7 @@ class Receiver(nn.Module):
 
         self.speech_acts = speech_acts
 
-        self.attn = nn.Linear(hidden_size, (n_distractors + 2) * 2)
-        # self.linear_out = nn.Linear(n_distractors, n_distractors + 2)
+        self.attn = nn.Linear(hidden_size, (n_distractors + 2) * 3)
 
         self.linear_speech_act = nn.Linear(hidden_size, 2)
 
@@ -106,9 +105,14 @@ class Receiver(nn.Module):
 
         embedded_input = embedded_input.tanh()
 
-        output = torch.bmm(embedded_input, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
+        product = torch.prod(embedded_input, dim=1).unsqueeze(1)
+        # summed = torch.sum(embedded_input, dim=1).unsqueeze(1)
 
-        attn_weights = F.softmax(self.attn(encoded_message).reshape(batch_size, -1, n_distractors), dim=-1)
+        catted = torch.cat((embedded_input, product), dim=1)
+
+        output = torch.bmm(catted, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
+
+        attn_weights = F.softmax(self.attn(encoded_message).reshape(batch_size, -1, n_distractors + 1), dim=-1)
         output = torch.bmm(attn_weights, output.unsqueeze(2)).squeeze()
         # output = self.linear_out(output)
 
