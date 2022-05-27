@@ -51,7 +51,7 @@ class LayerNormLSTMCell(jit.ScriptModule):
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, n_features, n_values, n_distractors, speech_acts, layer_norm, num_layers=1
+            self, vocab_size, embed_dim, hidden_size, n_features, n_values, num_objects, speech_acts, layer_norm, num_layers=1
     ):
         super(Receiver, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
@@ -72,7 +72,6 @@ class Receiver(nn.Module):
 
         self.speech_acts = speech_acts
 
-        # self.attn = nn.Linear(hidden_size, (n_distractors + 2) * 3)
         self.linear_out = nn.Linear(3, 4)
 
         self.linear_speech_act = nn.Linear(hidden_size, 2)
@@ -80,7 +79,7 @@ class Receiver(nn.Module):
     def forward(self, batch):
         message, input, message_lengths = batch
         batch_size = message.shape[0]
-        n_distractors = input.shape[1]
+        num_objects = input.shape[1]
         embedded_message = self.embedding(message)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
@@ -107,20 +106,17 @@ class Receiver(nn.Module):
         embedded_input = embedded_input.tanh()
 
         product = torch.prod(embedded_input, dim=1).unsqueeze(1)
-        # summed = torch.sum(embedded_input, dim=1).unsqueeze(1)
 
         catted = torch.cat((embedded_input, product), dim=1)
 
         output = torch.bmm(catted, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
 
-        # attn_weights = F.softmax(self.attn(encoded_message).reshape(batch_size, -1, n_distractors + 1), dim=-1)
-        # output = torch.bmm(attn_weights, output.unsqueeze(2)).squeeze()
         output = self.linear_out(output)
 
         speech_act_out = self.linear_speech_act(encoded_message)
         softmax_speech_act = F.softmax(speech_act_out, dim=-1)
 
-        speech_act_factor = torch.cat([softmax_speech_act[:, :1].repeat(1, n_distractors), softmax_speech_act[:,1:].repeat(1, 2)], dim=1)
+        speech_act_factor = torch.cat([softmax_speech_act[:, :1].repeat(1, num_objects), softmax_speech_act[:,1:].repeat(1, 2)], dim=1)
         output = speech_act_factor * output
 
         return output, speech_act_out
@@ -373,8 +369,8 @@ class SenderReceiver(pl.LightningModule):
         batch_size = message.shape[0]
 
         perplexities = []
-        for distractor_idx in range(input_receiver.shape[1]):
-            input = self.embed_input(input_receiver[:,distractor_idx])
+        for objects_idx in range(input_receiver.shape[1]):
+            input = self.embed_input(input_receiver[:,objects_idx])
 
             prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input_receiver) for _ in
                            range(self.num_layers)]
@@ -384,8 +380,7 @@ class SenderReceiver(pl.LightningModule):
             ]
 
 
-            perplexities_distractor = []
-
+            perplexities_objects = []
             for step in range(self.max_len):
                 for i, layer in enumerate(self.cells):
                     h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
@@ -394,15 +389,15 @@ class SenderReceiver(pl.LightningModule):
                     input = h_t
 
                 step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
-                # TODO: EOS handling?
+                # TODO: EOS handling!
                 ppls = step_logits[range(batch_size), message[:,step]]
-                perplexities_distractor.append(ppls)
+                perplexities_objects.append(ppls)
 
                 x = message[:, step]
                 input = self.embedding(x)
 
-            perplexities_distractor = torch.stack(perplexities_distractor).sum(dim=0)
-            perplexities.append(perplexities_distractor)
+            perplexities_objects = torch.stack(perplexities_objects).sum(dim=0)
+            perplexities.append(perplexities_objects)
 
         perplexities = torch.stack(perplexities).permute(1,0)
 
@@ -415,7 +410,7 @@ class SignalingGameModule(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
         self.save_hyperparameters()
-        self.num_distractors = self.hparams["data"]["num_distractors"]
+        self.num_objects = self.hparams["data"]["num_objects"]
         self.model_hparams = AttributeDict(self.hparams["model"])
 
         self.speech_acts = self.model_hparams.speech_acts
@@ -480,9 +475,9 @@ class SignalingGameModule(pl.LightningModule):
             self.receivers = ModuleList(
                 [
                     Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
-                                    self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
-                                    self.model_hparams.num_values, self.num_distractors, self.model_hparams.speech_acts,
-                                    self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
+                             self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
+                             self.model_hparams.num_values, self.num_objects, self.model_hparams.speech_acts,
+                             self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
                     for _ in range(self.model_hparams.num_receivers)
                  ]
             )
@@ -573,7 +568,7 @@ class SignalingGameModule(pl.LightningModule):
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction='none')
         self.log(f"receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        labels_speech_act = labels.clone().detach() >= self.num_distractors
+        labels_speech_act = labels.clone().detach() >= self.num_objects
         labels_speech_act = labels_speech_act.type(torch.long)
         acc_speech_act = (receiver_out_speech_act.argmax(dim=1) == labels_speech_act).detach()
 

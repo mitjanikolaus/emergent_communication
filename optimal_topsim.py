@@ -29,8 +29,8 @@ if __name__ == '__main__':
         config = yaml.load(f, Loader=yaml.FullLoader)
 
     datamodule = SignalingGameDataModule(num_features=config["model"]["num_features"],
-                                        num_values=config["model"]["num_values"],
-                                         num_distractors=config["data"]["num_distractors"],
+                                         num_values=config["model"]["num_values"],
+                                         num_objects=config["data"]["num_distractors"],
                                          test_set_size=config["data"]["test_set_size"],
                                          batch_size=config["data"]["batch_size"],
                                          num_workers=config["data"]["num_workers"])

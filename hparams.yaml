@@ -5,7 +5,7 @@ model:
   baseline_type: mean
   length_cost: 0.0
   max_len: 5
-  speech_acts: [QUESTION_EXISTS]
+  speech_acts: [REQUEST, QUESTION_FORALL, QUESTION_EXISTS]
   num_features: 4
   num_values: 4
   num_senders: 1
@@ -34,6 +34,6 @@ trainer:
 data:
   max_num_objects: 100000
   batch_size: 512
-  num_distractors: 2  # Including the target object
+  num_objects: 2
   test_set_size: 0.1
   num_workers: 0

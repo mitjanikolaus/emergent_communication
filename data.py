@@ -14,7 +14,7 @@ QUESTION_FORALL = "QUESTION_FORALL"
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, speech_acts, num_features, num_values, num_distractors, max_num_objects, test_set_size, batch_size, num_workers):
+    def __init__(self, speech_acts, num_features, num_values, num_objects, max_num_objects, test_set_size, batch_size, num_workers):
         super().__init__()
         self.speech_acts = speech_acts
         self.num_features = num_features
@@ -43,8 +43,8 @@ class SignalingGameDataModule(pl.LightningDataModule):
             self.train_data[speech_act] = data_train
             self.test_data[speech_act] = data_test
 
-        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, objects_train, num_distractors)
-        self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, objects_test, num_distractors)
+        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, objects_train, num_objects)
+        self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, objects_test, num_objects)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset_discrimination, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -100,19 +100,19 @@ class SignalingGameDataset(Dataset):
 
 
 class SignalingGameDiscriminationDataset(IterableDataset):
-    def __init__(self, dataset, num_distractors):
+    def __init__(self, dataset, num_objects):
         self.dataset = dataset
-        self.num_distractors = num_distractors
+        self.num_objects = num_objects
 
     def get_sample(self):
         receiver_input = []
-        for d in range(self.num_distractors):
-            distractor = self.dataset[random.choice(range(len(self.dataset)))]
-            receiver_input.append(distractor)
+        for d in range(self.num_objects):
+            obj = self.dataset[random.choice(range(len(self.dataset)))]
+            receiver_input.append(obj)
 
         receiver_input = torch.stack(receiver_input)
 
-        target_position = random.choice(range(self.num_distractors))
+        target_position = random.choice(range(self.num_objects))
         sender_input = receiver_input[target_position]
 
         return sender_input, receiver_input, target_position
@@ -201,11 +201,11 @@ def generate_requests(objects, speech_acts):
 
 class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
-    def __init__(self, speech_acts, datasets, objects, num_distractors):
+    def __init__(self, speech_acts, datasets, objects, num_objects):
         self.speech_acts = speech_acts
-        self.label_true = num_distractors
-        self.label_false = num_distractors + 1
-        self.num_distractors = num_distractors
+        self.label_true = num_objects
+        self.label_false = num_objects + 1
+        self.num_objects = num_objects
         self.datasets = datasets
         self.object_dataset = objects
 
@@ -213,10 +213,10 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         speech_act = random.choice(self.speech_acts)
 
         if speech_act == REQUEST:
-            target_position = random.choice(range(self.num_distractors))
+            target_position = random.choice(range(self.num_objects))
             label = target_position
-            distractors = random.sample(self.object_dataset, self.num_distractors)
-            receiver_input = torch.stack(distractors)
+            objects = random.sample(self.object_dataset, self.num_objects)
+            receiver_input = torch.stack(objects)
             sender_object = receiver_input[target_position]
             sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.speech_acts), sender_object))
             receiver_input[target_position] = get_object(sender_input, self.speech_acts)
@@ -227,9 +227,9 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
             # Ensure uniform distribution of labels
             label = random.choice([self.label_false, self.label_true])
-            receiver_input, l = self.generate_distractors_and_label_for_exists(self.object_dataset, question_content)
+            receiver_input, l = self.generate_objects_and_label_for_exists(self.object_dataset, question_content)
             while l != label:
-                receiver_input, l = self.generate_distractors_and_label_for_exists(self.object_dataset, question_content)
+                receiver_input, l = self.generate_objects_and_label_for_exists(self.object_dataset, question_content)
 
         elif speech_act == QUESTION_FORALL:
             question_content = random.choice(self.datasets[speech_act])
@@ -237,9 +237,9 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
             # Ensure uniform distribution of labels
             label = random.choice([self.label_false, self.label_true])
-            receiver_input, l = self.generate_distractors_and_label_for_forall(self.object_dataset, question_content)
+            receiver_input, l = self.generate_objects_and_label_for_forall(self.object_dataset, question_content)
             while l != label:
-                receiver_input, l = self.generate_distractors_and_label_for_forall(self.object_dataset, question_content)
+                receiver_input, l = self.generate_objects_and_label_for_forall(self.object_dataset, question_content)
 
         else:
             raise ValueError("Unknown speech act: ", speech_act)
@@ -251,9 +251,9 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         while 1:
             yield self.get_sample()
 
-    def generate_distractors_and_label_for_exists(self, data, question_content):
-        distractors = random.sample(data, self.num_distractors)
-        receiver_input = torch.stack(distractors)
+    def generate_objects_and_label_for_exists(self, data, question_content):
+        objects = random.sample(data, self.num_objects)
+        receiver_input = torch.stack(objects)
 
         label = self.label_false
         for object in receiver_input:
@@ -263,9 +263,9 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
         return receiver_input, label
 
-    def generate_distractors_and_label_for_forall(self, data, question_content):
-        distractors = random.sample(data, self.num_distractors)
-        receiver_input = torch.stack(distractors)
+    def generate_objects_and_label_for_forall(self, data, question_content):
+        objects = random.sample(data, self.num_objects)
+        receiver_input = torch.stack(objects)
 
         label = self.label_true
         for object in receiver_input:
