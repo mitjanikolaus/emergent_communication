@@ -529,7 +529,7 @@ class SignalingGameModule(pl.LightningModule):
         if opt_sender:
             opt_sender.zero_grad()
         opt_receiver.zero_grad()
-        loss, acc, acc_speech_act = self.forward(batch, sender_idx, receiver_idx)
+        loss, acc = self.forward(batch, sender_idx, receiver_idx)
         self.manual_backward(loss)
 
         perform_sender_update = torch.rand(1) < self.model_hparams.sender_learning_speed
@@ -542,7 +542,6 @@ class SignalingGameModule(pl.LightningModule):
 
         # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-        self.log(f"train_acc_speech_act", acc_speech_act.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         self.log(f"speech_act_acc", get_acc_per_speech_act(batch, acc, self.speech_acts), prog_bar=True, logger=True, add_dataloader_idx=False)
 
@@ -574,6 +573,7 @@ class SignalingGameModule(pl.LightningModule):
             acc_speech_act = (receiver_out_speech_act.argmax(dim=1) == labels_speech_act).detach()
             receiver_speech_act_loss = F.cross_entropy(receiver_out_speech_act, labels_speech_act, reduction='none')
             self.log(f"receiver_speech_act_loss", receiver_speech_act_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+            self.log(f"train_acc_speech_act", acc_speech_act.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
             receiver_loss += receiver_speech_act_loss
 
@@ -625,9 +625,9 @@ class SignalingGameModule(pl.LightningModule):
             self.baselines["length"].update(length_loss)
 
         if return_messages:
-            return optimized_loss, acc, acc_speech_act, messages
+            return optimized_loss, acc, messages
         else:
-            return optimized_loss, acc, acc_speech_act
+            return optimized_loss, acc
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
@@ -648,7 +648,7 @@ class SignalingGameModule(pl.LightningModule):
         sender_idx = self.val_epoch_sender_idx
         receiver_idx = self.val_epoch_receiver_idx
 
-        _, acc, acc_speech_act, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
+        _, acc, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
         return get_acc_per_speech_act(batch, acc, self.speech_acts), messages #
 
     def validation_epoch_end(self, validation_step_outputs):
