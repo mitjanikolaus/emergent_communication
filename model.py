@@ -72,7 +72,8 @@ class Receiver(nn.Module):
 
         self.speech_acts = speech_acts
 
-        self.attn = nn.Linear(hidden_size, (n_distractors + 2) * 3)
+        # self.attn = nn.Linear(hidden_size, (n_distractors + 2) * 3)
+        self.linear_out = nn.Linear(3, 4)
 
         self.linear_speech_act = nn.Linear(hidden_size, 2)
 
@@ -112,9 +113,9 @@ class Receiver(nn.Module):
 
         output = torch.bmm(catted, torch.unsqueeze(encoded_message, dim=-1)).squeeze(2)
 
-        attn_weights = F.softmax(self.attn(encoded_message).reshape(batch_size, -1, n_distractors + 1), dim=-1)
-        output = torch.bmm(attn_weights, output.unsqueeze(2)).squeeze()
-        # output = self.linear_out(output)
+        # attn_weights = F.softmax(self.attn(encoded_message).reshape(batch_size, -1, n_distractors + 1), dim=-1)
+        # output = torch.bmm(attn_weights, output.unsqueeze(2)).squeeze()
+        output = self.linear_out(output)
 
         speech_act_out = self.linear_speech_act(encoded_message)
         softmax_speech_act = F.softmax(speech_act_out, dim=-1)
