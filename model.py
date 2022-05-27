@@ -690,8 +690,8 @@ class SignalingGameModule(pl.LightningModule):
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
         messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
-        meanings_request = meanings[speech_acts == REQUEST]
-        messages_request = messages[speech_acts == REQUEST]
+        meanings_request = meanings[speech_acts == REQUEST].cpu()
+        messages_request = messages[speech_acts == REQUEST].cpu()
         if self.model_hparams.log_entropy_on_validation:
             entropy = compute_entropy(messages_request)
             self.log("message_entropy", entropy, prog_bar=True, logger=True)
