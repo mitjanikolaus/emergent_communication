@@ -234,7 +234,7 @@ class OptimalSender(pl.LightningModule):
             # Cut out relevant range for this feature
             relevant_range = intent_objects[:, i * self.n_values:(i + 1) * self.n_values]
             # Prepend zeros for case if feature is not set
-            zeros = torch.zeros(relevant_range.shape[0]).unsqueeze(1)
+            zeros = torch.zeros(relevant_range.shape[0]).unsqueeze(1).type_as(intent_objects)
             relevant_range = torch.cat((zeros, relevant_range), dim=1)
 
             value = torch.argmax(relevant_range, dim=1)
