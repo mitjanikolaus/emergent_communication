@@ -46,13 +46,17 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, objects_train, num_objects)
         self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, objects_test, num_objects)
 
+        self.lang_analysis_dataset = SignalingGameLangAnalysisDataset(speech_acts, self.train_data)
+
     def train_dataloader(self):
         return DataLoader(self.train_dataset_discrimination, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def val_dataloader(self):
         generalization_dataloader = DataLoader(self.test_dataset_discrimination, batch_size=self.batch_size,
                                                num_workers=self.num_workers)
-        return generalization_dataloader
+        language_analysis_dataloader = DataLoader(self.lang_analysis_dataset, batch_size=self.batch_size,
+                                                  num_workers=self.num_workers)
+        return generalization_dataloader, language_analysis_dataloader
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
         if dataloader_idx == 0:
@@ -148,17 +152,22 @@ def generate_question_content(num_features, num_values):
 
 
 class SignalingGameLangAnalysisDataset(Dataset):
-    def __init__(self, speech_acts, data, objects):
+    def __init__(self, speech_acts, datasets):
         self.speech_acts = speech_acts
-        self.objects = objects
-        self.intents = generate_requests(self.objects, self.speech_acts)
+        self.datasets = datasets
+
+        self.data = []
+        for speech_act, contents in self.datasets.items():
+            for content in contents:
+                sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.speech_acts), content))
+                self.data.append(sender_input)
 
     def __len__(self):
-        return len(self.intents)
+        return len(self.data)
 
     def __getitem__(self, idx):
-        sample = self.intents[idx]
-        return sample
+        sender_input = self.data[idx]
+        return sender_input
 
 
 def get_speech_act(intent, speech_acts):

@@ -14,7 +14,7 @@ from torch.nn import ModuleList, Parameter
 
 import pandas as pd
 
-from data import get_speech_act, get_speech_act_codes, get_objects
+from data import get_speech_act, get_speech_act_codes, get_objects, REQUEST
 from language_analysis import compute_topsim, compute_entropy
 from utils import MeanBaseline, find_lengths, NoBaseline
 
@@ -644,31 +644,43 @@ class SignalingGameModule(pl.LightningModule):
             self.val_epoch_receiver_idx = random.choice(range(self.model_hparams.num_receivers))
         print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
 
-    def validation_step(self, batch, batch_idx):
-        sender_idx = self.val_epoch_sender_idx
-        receiver_idx = self.val_epoch_receiver_idx
+    def validation_step(self, batch, batch_idx, dataloader_idx):
+        if dataloader_idx == 0:
+            # Generalization
+            sender_idx = self.val_epoch_sender_idx
+            receiver_idx = self.val_epoch_receiver_idx
 
-        _, acc, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
-        return get_acc_per_speech_act(batch, acc, self.speech_acts), messages #
+            _, acc, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
+            return get_acc_per_speech_act(batch, acc, self.speech_acts), messages
+        elif dataloader_idx == 1:
+            # Language analysis
+            sender_idx = self.val_epoch_sender_idx
+            sender = self.senders[sender_idx]
+
+            sender_input = batch
+            messages, _, _ = sender(sender_input)
+            return sender_input, messages
 
     def validation_epoch_end(self, validation_step_outputs):
         # Generalization:
-        accs = [acc for acc, _ in validation_step_outputs]
+        generalization_results = validation_step_outputs[0]
+        accs = [acc for acc, _ in generalization_results]
         generalization_results = pd.DataFrame.from_records(accs)
         test_acc = generalization_results.mean().to_dict()
         self.log("test_acc", test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
 
         # Language analysis
-        messages = torch.cat([msg for _, msg in validation_step_outputs])
-        num_unique_messages = len(messages.unique(dim=0))
-        self.log("num_unique_messages", float(num_unique_messages), prog_bar=True, logger=True)
-        print("num_unique_messages: ", num_unique_messages)
-        # self.analyze_language(lang_analysis_results)
+        language_analysis_results = validation_step_outputs[1]
+        self.analyze_language(language_analysis_results)
 
     def analyze_language(self, lang_analysis_results):
-        meanings = torch.cat([meaning for meaning, message in lang_analysis_results])
-        messages = torch.cat([message for meaning, message in lang_analysis_results])
+        meanings = torch.cat([meaning for meaning, _ in lang_analysis_results])
+        messages = torch.cat([message for _, message in lang_analysis_results])
+        speech_acts = np.array([get_speech_act(intent, self.speech_acts) for intent in meanings])
+
+        num_unique_messages = len(messages.unique(dim=0))
+        self.log("num_unique_messages", float(num_unique_messages), prog_bar=True, logger=True)
 
         meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
 
@@ -678,17 +690,15 @@ class SignalingGameModule(pl.LightningModule):
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
         messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
-        num_unique_messages = len(messages_strings.unique())
-        self.log("num_unique_messages", float(num_unique_messages), prog_bar=True, logger=True)
-        print("num_unique_messages: ", num_unique_messages)
-
+        meanings_request = meanings[speech_acts == REQUEST]
+        messages_request = messages[speech_acts == REQUEST]
         if self.model_hparams.log_entropy_on_validation:
-            entropy = compute_entropy(messages)
+            entropy = compute_entropy(messages_request)
             self.log("message_entropy", entropy, prog_bar=True, logger=True)
             print("message_entropy: ", entropy)
 
         if self.model_hparams.log_topsim_on_validation:
-            topsim = compute_topsim(meanings, messages)
+            topsim = compute_topsim(meanings_request, messages_request)
             self.log("topsim", topsim, prog_bar=True, logger=True)
             print("Topsim: ", topsim)
 

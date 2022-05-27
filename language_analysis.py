@@ -1,3 +1,4 @@
+import datetime
 from collections import defaultdict
 
 import editdistance
@@ -29,6 +30,9 @@ def compute_topsim(
     message_distance_fn: str = "edit",
 ) -> float:
 
+    print(f"Start computing topsim for {len(meanings)} items")
+    start_time = datetime.datetime.now()
+
     distances = {
         "edit": lambda x, y: editdistance.eval(x, y) / ((len(x) + len(y)) / 2),
         "cosine": distance.cosine,
@@ -58,4 +62,7 @@ def compute_topsim(
 
     topsim = spearmanr(meaning_dist, message_dist, nan_policy="raise").correlation
 
+    end_time = datetime.datetime.now()
+    difference = end_time - start_time
+    print(f"End computing topsim. Duration: {difference.total_seconds()}s")
     return topsim
