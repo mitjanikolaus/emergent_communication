@@ -35,6 +35,6 @@ trainer:
 data:
   max_num_objects: 100000
   batch_size: 512
-  num_objects: 3
+  num_objects: 2
   test_set_size: 0.1
   num_workers: 0
