@@ -43,8 +43,14 @@ class SignalingGameDataModule(pl.LightningDataModule):
             self.train_data[speech_act] = data_train
             self.test_data[speech_act] = data_test
 
-        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, objects_train, num_objects)
-        self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, objects_test, num_objects)
+        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, objects_train, num_objects, speech_acts)
+
+        if len(self.test_data) < 4:
+            print("Small test data! Not possible to test generalization for question speech acts.")
+            speech_acts_test = [sa for sa in speech_acts if sa not in [QUESTION_EXISTS, QUESTION_FORALL]]
+            self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts_test, self.test_data, objects_test, num_objects, speech_acts)
+        else:
+            self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, objects_test, num_objects, speech_acts)
 
         self.lang_analysis_dataset = SignalingGameLangAnalysisDataset(speech_acts, self.train_data)
 
@@ -210,8 +216,9 @@ def generate_requests(objects, speech_acts):
 
 class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
-    def __init__(self, speech_acts, datasets, objects, num_objects):
+    def __init__(self, speech_acts, datasets, objects, num_objects, all_speech_acts):
         self.speech_acts = speech_acts
+        self.all_speech_acts = all_speech_acts
         self.label_true = num_objects
         self.label_false = num_objects + 1
         self.num_objects = num_objects
@@ -227,12 +234,12 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
             objects = random.sample(self.object_dataset, self.num_objects)
             receiver_input = torch.stack(objects)
             sender_object = receiver_input[target_position]
-            sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.speech_acts), sender_object))
-            receiver_input[target_position] = get_object(sender_input, self.speech_acts)
+            sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.all_speech_acts), sender_object))
+            receiver_input[target_position] = get_object(sender_input, self.all_speech_acts)
 
         elif speech_act == QUESTION_EXISTS:
             question_content = random.choice(self.datasets[speech_act])
-            sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.speech_acts), question_content))
+            sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.all_speech_acts), question_content))
 
             # Ensure uniform distribution of labels
             label = random.choice([self.label_false, self.label_true])
@@ -242,7 +249,7 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
         elif speech_act == QUESTION_FORALL:
             question_content = random.choice(self.datasets[speech_act])
-            sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.speech_acts), question_content))
+            sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.all_speech_acts), question_content))
 
             # Ensure uniform distribution of labels
             label = random.choice([self.label_false, self.label_true])
