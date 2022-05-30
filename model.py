@@ -543,7 +543,7 @@ class SignalingGameModule(pl.LightningModule):
         # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        self.log(f"speech_act_acc", get_acc_per_speech_act(batch, acc, self.speech_acts), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log_dict(get_acc_per_speech_act(batch, acc, self.speech_acts), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         # self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
@@ -651,7 +651,7 @@ class SignalingGameModule(pl.LightningModule):
             receiver_idx = self.val_epoch_receiver_idx
 
             _, acc, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
-            return get_acc_per_speech_act(batch, acc, self.speech_acts), messages
+            return get_acc_per_speech_act(batch, acc, self.speech_acts, is_test_acc=True), messages
         elif dataloader_idx == 1:
             # Language analysis
             sender_idx = self.val_epoch_sender_idx
@@ -667,7 +667,7 @@ class SignalingGameModule(pl.LightningModule):
         accs = [acc for acc, _ in generalization_results]
         generalization_results = pd.DataFrame.from_records(accs)
         test_acc = generalization_results.mean().to_dict()
-        self.log("test_acc", test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log_dict(test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
 
         # Language analysis
@@ -702,11 +702,23 @@ class SignalingGameModule(pl.LightningModule):
             self.log("topsim", topsim, prog_bar=True, logger=True)
             print("Topsim: ", topsim)
 
+    def on_fit_start(self):
+        # Set which metrics to use for hyperparameter tuning
+        metrics = self.speech_acts.copy()
+        for speech_act in self.speech_acts:
+            metrics.append(speech_act + "_test")
 
-def get_acc_per_speech_act(batch, acc, speech_acts):
+        metrics.append("topsim")
+        self.logger.log_hyperparams(self.hparams, {m: 0 for m in metrics})
+
+
+def get_acc_per_speech_act(batch, acc, speech_acts, is_test_acc=False):
     sender_input, _, _ = batch
     accs = {}
     speech_acts_batch = np.array([get_speech_act(intent, speech_acts) for intent in sender_input])
     for speech_act in speech_acts:
-        accs[speech_act] = acc[speech_acts_batch == speech_act].float().mean().item()
+        name = speech_act
+        if is_test_acc:
+            name += "_test"
+        accs[name] = acc[speech_acts_batch == speech_act].float().mean().item()
     return accs

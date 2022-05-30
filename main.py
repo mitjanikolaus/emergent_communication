@@ -26,11 +26,10 @@ def run(args):
 
     model = SignalingGameModule(**config)
 
-    trainer_args = config["trainer"]
-    trainer = pl.Trainer.from_argparse_args(Namespace(**trainer_args))
+    trainer = pl.Trainer.from_argparse_args(Namespace(**config["trainer"]))
 
     # Initial validation
-    trainer.validate(model, datamodule=datamodule, verbose=False)
+    # trainer.validate(model, datamodule=datamodule, verbose=False)
 
     # Training
     trainer.fit(model, datamodule)

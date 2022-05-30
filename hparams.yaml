@@ -26,6 +26,7 @@ model:
   log_topsim_on_validation: true
   log_entropy_on_validation: true
 trainer:
+  default_hp_metric: false
   val_check_interval: 100
   log_every_n_steps: 25
   limit_val_batches: 10
