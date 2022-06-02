@@ -27,7 +27,7 @@ def run(args):
 
     model = SignalingGameModule(**config)
 
-    checkpoint_callback = ModelCheckpoint(monitor="test_acc")
+    checkpoint_callback = ModelCheckpoint(monitor="test_acc", mode="max")
 
     trainer = pl.Trainer.from_argparse_args(Namespace(**config["trainer"]), callbacks=[checkpoint_callback])
 
