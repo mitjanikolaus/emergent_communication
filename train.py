@@ -4,6 +4,7 @@ from argparse import Namespace
 import yaml
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from data import SignalingGameDataModule
 from model import SignalingGameModule
@@ -26,7 +27,9 @@ def run(args):
 
     model = SignalingGameModule(**config)
 
-    trainer = pl.Trainer.from_argparse_args(Namespace(**config["trainer"]))
+    checkpoint_callback = ModelCheckpoint(monitor="test_acc")
+
+    trainer = pl.Trainer.from_argparse_args(Namespace(**config["trainer"]), callbacks=[checkpoint_callback])
 
     # Initial validation
     # trainer.validate(model, datamodule=datamodule, verbose=False)
