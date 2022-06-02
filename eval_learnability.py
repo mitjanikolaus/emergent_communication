@@ -57,7 +57,7 @@ def run(args):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str)
-    parser.add_argument("--mlp_receivers", action="store_true", default=False)
+    parser.add_argument("--mlp-receivers", action="store_true", default=False)
 
     return parser.parse_args()
 
