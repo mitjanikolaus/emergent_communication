@@ -247,9 +247,7 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
             # Ensure uniform distribution of labels
             label = random.choice([self.label_false, self.label_true])
-            receiver_input, l = self.generate_objects_and_label_for_exists(self.object_dataset, question_content)
-            while l != label:
-                receiver_input, l = self.generate_objects_and_label_for_exists(self.object_dataset, question_content)
+            receiver_input = self.generate_objects_and_label_for_exists(self.object_dataset, question_content, label)
 
         elif speech_act == QUESTION_FORALL:
             question_content = random.choice(self.datasets[speech_act])
@@ -257,9 +255,7 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
             # Ensure uniform distribution of labels
             label = random.choice([self.label_false, self.label_true])
-            receiver_input, l = self.generate_objects_and_label_for_forall(self.object_dataset, question_content)
-            while l != label:
-                receiver_input, l = self.generate_objects_and_label_for_forall(self.object_dataset, question_content)
+            receiver_input = self.generate_objects_and_label_for_forall(self.object_dataset, question_content, label)
 
         else:
             raise ValueError("Unknown speech act: ", speech_act)
@@ -271,26 +267,30 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         while 1:
             yield self.get_sample()
 
-    def generate_objects_and_label_for_exists(self, data, question_content):
-        objects = random.sample(data, self.num_objects)
+    def generate_objects_and_label_for_exists(self, data, question_content, label):
+        matched = [torch.sum(d * question_content).item() > 0 for d in data]
+        if label == self.label_true:
+            data_matched = [d for d, m in zip(data, matched) if m]
+            objects = random.sample(data_matched, 1)
+            objects.extend(random.sample(data, self.num_objects - 1))
+        else:
+            data_not_matched = [d for d, m in zip(data, matched) if not m]
+            objects = random.sample(data_not_matched, self.num_objects)
+
         receiver_input = torch.stack(objects)
 
-        label = self.label_false
-        for object in receiver_input:
-            if torch.sum(object * question_content) > 0:
-                label = self.label_true
-                break
+        return receiver_input
 
-        return receiver_input, label
+    def generate_objects_and_label_for_forall(self, data, question_content, label):
+        matched = [torch.sum(d * question_content).item() > 0 for d in data]
+        if label == self.label_true:
+            data_matched = [d for d, m in zip(data, matched) if m]
+            objects = random.sample(data_matched, self.num_objects)
+        else:
+            data_not_matched = [d for d, m in zip(data, matched) if not m]
+            objects = random.sample(data_not_matched, 1)
+            objects.extend(random.sample(data, self.num_objects-1))
 
-    def generate_objects_and_label_for_forall(self, data, question_content):
-        objects = random.sample(data, self.num_objects)
         receiver_input = torch.stack(objects)
 
-        label = self.label_true
-        for object in receiver_input:
-            if torch.sum(object * question_content) == 0:
-                label = self.label_false
-                break
-
-        return receiver_input, label
+        return receiver_input
