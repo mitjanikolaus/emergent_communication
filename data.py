@@ -48,7 +48,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
 
         self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts_used, self.train_data, objects_train, num_objects, speech_acts)
 
-        if len(self.test_data) < 4:
+        if len(objects_test) < 4:
             print("Small test data! Not possible to test generalization for question speech acts.")
             speech_acts_test = [sa for sa in speech_acts_used if sa not in [QUESTION_EXISTS, QUESTION_FORALL]]
             self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts_test, self.test_data, objects_test, num_objects, speech_acts)
