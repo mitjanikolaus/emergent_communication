@@ -37,5 +37,5 @@ data:
   max_num_objects: 100000
   batch_size: 512
   num_objects: 2
-  test_set_size: 0.1
+  test_set_size: 0.2
   num_workers: 0
