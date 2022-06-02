@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 RANDOM_STATE_TRAIN_TEST_SPLIT = 1
 
@@ -98,41 +99,6 @@ def generate_objects(num_features, num_values, max_num_objects):
             samples.add(z.view(-1))
 
     return list(samples)
-
-
-class SignalingGameDataset(Dataset):
-    def __init__(self, num_features, num_values):
-        self.data = generate_objects(num_features, num_values)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        sample = self.data[idx]
-        return sample
-
-
-class SignalingGameDiscriminationDataset(IterableDataset):
-    def __init__(self, dataset, num_objects):
-        self.dataset = dataset
-        self.num_objects = num_objects
-
-    def get_sample(self):
-        receiver_input = []
-        for d in range(self.num_objects):
-            obj = self.dataset[random.choice(range(len(self.dataset)))]
-            receiver_input.append(obj)
-
-        receiver_input = torch.stack(receiver_input)
-
-        target_position = random.choice(range(self.num_objects))
-        sender_input = receiver_input[target_position]
-
-        return sender_input, receiver_input, target_position
-
-    def __iter__(self):
-        while 1:
-            yield self.get_sample()
 
 
 def generate_question_contents(num_features, num_values):
@@ -229,6 +195,17 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         self.datasets = datasets
         self.object_dataset = objects
 
+        self.objects_matched = {}
+        self.objects_not_matched = {}
+        print("Generating matches:")
+        for speech_act in self.speech_acts:
+            if speech_act in [QUESTION_EXISTS, QUESTION_FORALL]:
+                for question_content in tqdm(self.datasets[speech_act]):
+                    matched = [d for d in self.object_dataset if torch.sum(d * question_content).item() > 0]
+                    not_matched = [d for d in self.object_dataset if not torch.sum(d * question_content).item() > 0]
+                    self.objects_matched[question_content] = matched
+                    self.objects_not_matched[question_content] = not_matched
+
     def get_sample(self):
         speech_act = random.choice(self.speech_acts)
 
@@ -262,19 +239,17 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
 
         return sender_input, receiver_input, label
 
-
     def __iter__(self):
         while 1:
             yield self.get_sample()
 
     def generate_objects_and_label_for_exists(self, data, question_content, label):
-        matched = [torch.sum(d * question_content).item() > 0 for d in data]
         if label == self.label_true:
-            data_matched = [d for d, m in zip(data, matched) if m]
+            data_matched = self.objects_matched[question_content]
             objects = random.sample(data_matched, 1)
             objects.extend(random.sample(data, self.num_objects - 1))
         else:
-            data_not_matched = [d for d, m in zip(data, matched) if not m]
+            data_not_matched = self.objects_not_matched[question_content]
             objects = random.sample(data_not_matched, self.num_objects)
 
         receiver_input = torch.stack(objects)
@@ -282,12 +257,11 @@ class SignalingGameSpeechActsDiscriminationDataset(IterableDataset):
         return receiver_input
 
     def generate_objects_and_label_for_forall(self, data, question_content, label):
-        matched = [torch.sum(d * question_content).item() > 0 for d in data]
         if label == self.label_true:
-            data_matched = [d for d, m in zip(data, matched) if m]
+            data_matched = self.objects_matched[question_content]
             objects = random.sample(data_matched, self.num_objects)
         else:
-            data_not_matched = [d for d, m in zip(data, matched) if not m]
+            data_not_matched = self.objects_not_matched[question_content]
             objects = random.sample(data_not_matched, 1)
             objects.extend(random.sample(data, self.num_objects-1))
 
