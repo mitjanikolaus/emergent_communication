@@ -14,9 +14,12 @@ QUESTION_FORALL = "QUESTION_FORALL"
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, speech_acts, num_features, num_values, num_objects, max_num_objects, test_set_size, batch_size, num_workers):
+    def __init__(self, speech_acts, num_features, num_values, num_objects, max_num_objects, test_set_size, batch_size, num_workers, speech_acts_used=None):
         super().__init__()
-        self.speech_acts = speech_acts
+        if speech_acts_used is None:
+            speech_acts_used = speech_acts
+
+        self.speech_acts_used = speech_acts_used
         self.num_features = num_features
         self.num_values = num_values
         self.batch_size = batch_size
@@ -30,7 +33,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
 
         self.train_data = dict()
         self.test_data = dict()
-        for speech_act in self.speech_acts:
+        for speech_act in self.speech_acts_used:
             if speech_act == REQUEST:
                 data_train = objects_train
                 data_test = objects_test
@@ -43,16 +46,16 @@ class SignalingGameDataModule(pl.LightningDataModule):
             self.train_data[speech_act] = data_train
             self.test_data[speech_act] = data_test
 
-        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.train_data, objects_train, num_objects, speech_acts)
+        self.train_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts_used, self.train_data, objects_train, num_objects, speech_acts)
 
         if len(self.test_data) < 4:
             print("Small test data! Not possible to test generalization for question speech acts.")
-            speech_acts_test = [sa for sa in speech_acts if sa not in [QUESTION_EXISTS, QUESTION_FORALL]]
+            speech_acts_test = [sa for sa in speech_acts_used if sa not in [QUESTION_EXISTS, QUESTION_FORALL]]
             self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts_test, self.test_data, objects_test, num_objects, speech_acts)
         else:
-            self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts, self.test_data, objects_test, num_objects, speech_acts)
+            self.test_dataset_discrimination = SignalingGameSpeechActsDiscriminationDataset(speech_acts_used, self.test_data, objects_test, num_objects, speech_acts)
 
-        self.lang_analysis_dataset = SignalingGameLangAnalysisDataset(speech_acts, self.train_data)
+        self.lang_analysis_dataset = SignalingGameLangAnalysisDataset(speech_acts_used, self.train_data, speech_acts)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset_discrimination, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -158,14 +161,15 @@ def generate_question_content(num_features, num_values):
 
 
 class SignalingGameLangAnalysisDataset(Dataset):
-    def __init__(self, speech_acts, datasets):
+    def __init__(self, speech_acts, datasets, all_speech_acts):
         self.speech_acts = speech_acts
+        self.all_speech_acts = all_speech_acts
         self.datasets = datasets
 
         self.data = []
         for speech_act, contents in self.datasets.items():
             for content in contents:
-                sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.speech_acts), content))
+                sender_input = torch.cat((speech_act_to_one_hot(speech_act, self.all_speech_acts), content))
                 self.data.append(sender_input)
 
     def __len__(self):

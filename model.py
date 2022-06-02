@@ -133,7 +133,7 @@ class Sender(pl.LightningModule):
         hidden_size,
         max_len,
         layer_norm,
-        num_layers=1,
+        num_layers,
     ):
         super(Sender, self).__init__()
         self.max_len = max_len
@@ -471,16 +471,23 @@ class SignalingGameModule(pl.LightningModule):
                         for _ in range(self.model_hparams.num_senders)
                     ]
                 )
+            self.init_receivers()
 
-            self.receivers = ModuleList(
-                [
-                    Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
-                             self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
-                             self.model_hparams.num_values, self.num_objects, self.model_hparams.speech_acts,
-                             self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
-                    for _ in range(self.model_hparams.num_receivers)
-                 ]
-            )
+    def init_receivers(self):
+        self.receivers = ModuleList(
+            [
+                Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
+                         self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
+                         self.model_hparams.num_values, self.num_objects, self.model_hparams.speech_acts,
+                         self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
+                for _ in range(self.model_hparams.num_receivers)
+            ]
+        )
+
+    def freeze_senders(self):
+        for sender in self.senders:
+            for param in sender.parameters():
+                param.requires_grad = False
 
     def configure_optimizers(self):
         if self.model_hparams.optimal_sender:
