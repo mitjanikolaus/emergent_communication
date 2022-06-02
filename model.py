@@ -122,6 +122,34 @@ class Receiver(nn.Module):
         return output, speech_act_out
 
 
+class ReceiverMLP(nn.Module):
+    def __init__(
+            self, vocab_size, embed_dim, n_features, n_values, num_objects, max_message_len
+    ):
+        super(ReceiverMLP, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.linear_message = nn.Linear(embed_dim * (max_message_len + 1), embed_dim)
+
+        self.linear_input = nn.Linear(n_features*n_values, embed_dim)
+        self.linear_out = nn.Linear((max_message_len + 1 + num_objects) * embed_dim, num_objects)
+
+    def forward(self, batch):
+        message, input, message_lengths = batch
+        batch_size = message.shape[0]
+
+        embedded_message = self.embedding(message)
+        embedded_message = F.relu(embedded_message)
+        embedded_message = self.linear_message(embedded_message.reshape(batch_size, -1))
+        embedded_message = F.relu(embedded_message)
+
+        embedded_input = self.linear_input(input)
+        embedded_input = F.relu(embedded_input)
+
+        output = torch.bmm(embedded_input, torch.unsqueeze(embedded_message, dim=-1)).squeeze(2)
+
+        return output, None
+
+
 class Sender(pl.LightningModule):
     def __init__(
         self,
@@ -480,6 +508,16 @@ class SignalingGameModule(pl.LightningModule):
                          self.model_hparams.receiver_hidden_dim, self.model_hparams.num_features,
                          self.model_hparams.num_values, self.num_objects, self.model_hparams.speech_acts,
                          self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
+                for _ in range(self.model_hparams.num_receivers)
+            ]
+        )
+
+    def init_MLP_receivers(self):
+        self.receivers = ModuleList(
+            [
+                ReceiverMLP(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
+                         self.model_hparams.num_features, self.model_hparams.num_values, self.num_objects,
+                         self.model_hparams.max_len)
                 for _ in range(self.model_hparams.num_receivers)
             ]
         )

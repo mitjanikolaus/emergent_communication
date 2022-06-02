@@ -22,9 +22,6 @@ def run(args):
     config['trainer']['val_check_interval'] = 100
     model.model_hparams['log_topsim_on_validation'] = False
 
-    # model.model_hparams['receiver_embed_dim'] = 32
-    # model.model_hparams['receiver_hidden_dim'] = 32
-
     # model.model_hparams['receiver_aux_loss'] = False
 
     speech_acts_used = [REQUEST]
@@ -40,7 +37,13 @@ def run(args):
                                          speech_acts_used=speech_acts_used)
 
     # Reset receivers
-    model.init_receivers()
+    if args.mlp_receivers:
+        model.init_MLP_receivers()
+        model.model_hparams['receiver_aux_loss'] = False
+        model.model_hparams['receiver_embed_dim'] = 32
+        # model.model_hparams['receiver_hidden_dim'] = 32
+    else:
+        model.init_receivers()
 
     # Freeze senders
     model.freeze_senders()
@@ -54,6 +57,7 @@ def run(args):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str)
+    parser.add_argument("--mlp_receivers", action="store_true", default=False)
 
     return parser.parse_args()
 
