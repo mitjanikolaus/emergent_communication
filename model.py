@@ -715,7 +715,7 @@ class SignalingGameModule(pl.LightningModule):
         self.log_dict(test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
 
-        avg_test_acc = np.mean(list(test_acc.values()))
+        avg_test_acc = np.nanmean(list(test_acc.values()))
         self.log("test_acc", avg_test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         # Language analysis
