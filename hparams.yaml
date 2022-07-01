@@ -23,13 +23,13 @@ model:
   sender_hidden_dim: 128
   sender_learning_speed: 1
   vocab_size: 10
-  log_topsim_on_validation: true
-  log_entropy_on_validation: true
+  log_topsim_on_validation: false
+  log_entropy_on_validation: false
 trainer:
   default_hp_metric: false
-  val_check_interval: 100
-  log_every_n_steps: 25
-  limit_val_batches: 10
+  val_check_interval: 1000
+  log_every_n_steps: 100
+  limit_val_batches: 100
   limit_train_batches: 100000
   num_sanity_val_steps: 3
   gpus: 0
