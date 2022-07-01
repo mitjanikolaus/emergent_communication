@@ -16,10 +16,8 @@ def run(args):
 
     seed_everything(config["seed"], workers=True)
 
-    datamodule = SignalingGameDataModule(speech_acts=config["model"]["speech_acts"],
-                                         num_features=config["model"]["num_features"],
+    datamodule = SignalingGameDataModule(num_features=config["model"]["num_features"],
                                          num_values=config["model"]["num_values"],
-                                         num_objects=config["data"]["num_objects"],
                                          max_num_objects=config["data"]["max_num_objects"],
                                          test_set_size=config["data"]["test_set_size"],
                                          batch_size=config["data"]["batch_size"],

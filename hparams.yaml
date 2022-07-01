@@ -5,7 +5,6 @@ model:
   baseline_type: mean
   length_cost: 0.0
   max_len: 5
-  speech_acts: [REQUEST, QUESTION_FORALL, QUESTION_EXISTS]
   num_features: 4
   num_values: 4
   num_senders: 1
@@ -22,20 +21,18 @@ model:
   sender_layer_norm: true
   sender_hidden_dim: 128
   sender_learning_speed: 1
-  vocab_size: 10
-  log_topsim_on_validation: false
+  vocab_size: 20
+  log_topsim_on_validation: true
   log_entropy_on_validation: false
 trainer:
   default_hp_metric: false
-  val_check_interval: 1000
-  log_every_n_steps: 100
-  limit_val_batches: 100
-  limit_train_batches: 100000
+  max_epochs: 100000
+  check_val_every_n_epoch: 100
+  log_every_n_steps: 2
   num_sanity_val_steps: 3
   gpus: 0
 data:
   max_num_objects: 100000
-  batch_size: 512
-  num_objects: 2
+  batch_size: 128
   test_set_size: 0.2
   num_workers: 0
