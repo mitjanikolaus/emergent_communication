@@ -3,7 +3,7 @@ model:
   symmetric: false
   optimal_sender: false
   baseline_type: mean
-  length_cost: 0.0
+  length_cost: 0.05
   max_len: 5
   num_features: 4
   num_values: 4
@@ -22,6 +22,7 @@ model:
   sender_hidden_dim: 128
   sender_learning_speed: 1
   vocab_size: 20
+  noise: 0.1
   log_topsim_on_validation: true
   log_entropy_on_validation: false
 trainer:

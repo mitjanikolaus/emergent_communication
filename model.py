@@ -53,7 +53,7 @@ class Receiver(nn.Module):
             self, vocab_size, embed_dim, hidden_size, n_features, n_values, layer_norm, num_layers
     ):
         super(Receiver, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.embedding = nn.Embedding(vocab_size+1, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -93,7 +93,7 @@ class Receiver(nn.Module):
 
             hidden_states[:, step] = h_t
 
-        encoded_message = hidden_states[range(batch_size), message_lengths-1]
+        encoded_message = hidden_states[range(batch_size), message_lengths]
 
         output = self.linear_out(encoded_message)
 
@@ -105,7 +105,7 @@ class ReceiverMLP(nn.Module):
             self, vocab_size, embed_dim, n_features, n_values, max_message_len
     ):
         super(ReceiverMLP, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.embedding = nn.Embedding(vocab_size+1, embed_dim)
         self.linear_message = nn.Linear(embed_dim * (max_message_len + 1), embed_dim)
 
         self.linear_out = nn.Linear(embed_dim, n_features*n_values)
@@ -423,6 +423,7 @@ class SignalingGameModule(pl.LightningModule):
         if not 0 < self.model_hparams.receiver_learning_speed <= 1:
             raise ValueError("Receiver learning speed should be between 0 and 1 ", self.model_hparams.receiver_learning_speed)
 
+        self.token_noise = self.model_hparams["vocab_size"]
         self.automatic_optimization = False
 
     def init_agents(self):
@@ -561,6 +562,13 @@ class SignalingGameModule(pl.LightningModule):
         message_lengths = find_lengths(messages)
         self.log(f"message_lengths", message_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
+        if self.model_hparams["noise"] > 0:
+            # TODO: allow that 0s are replaced?
+            indices = torch.multinomial(torch.tensor([1 - self.model_hparams["noise"], self.model_hparams["noise"]]),
+                                        messages.shape[0] * messages.shape[1], replacement=True)
+            indices = indices.reshape(messages.shape[0], messages.shape[1])
+            messages[indices == 1] = self.token_noise
+
         receiver_output = receiver(
             (messages, message_lengths)
         )
@@ -590,10 +598,10 @@ class SignalingGameModule(pl.LightningModule):
         effective_log_prob_s = torch.zeros(batch_size).type_as(sender_input)
 
         for i in range(messages.size(1)):
-            not_eosed = (i < message_lengths).float()
+            not_eosed = (i < message_lengths.add(1)).float()
             effective_entropy_s += entropy_s[:, i] * not_eosed
             effective_log_prob_s += log_prob_s[:, i] * not_eosed
-        effective_entropy_s = effective_entropy_s / message_lengths.float()
+        effective_entropy_s = effective_entropy_s / message_lengths.add(1).float()
 
         weighted_entropy = (
             effective_entropy_s.mean() * self.sender_entropy_coeff
