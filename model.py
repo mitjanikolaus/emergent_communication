@@ -547,10 +547,7 @@ class SignalingGameModule(pl.LightningModule):
         if perform_receiver_update:
             opt_receiver.step()
 
-        # self.log(f"train_acc_sender_{sender_idx}_receiver_{receiver_idx}", acc, logger=True, add_dataloader_idx=False)
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-
-        # self.log_dict(get_acc_per_speech_act(batch, acc, self.speech_acts), prog_bar=True, logger=True, add_dataloader_idx=False)
 
         # self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
