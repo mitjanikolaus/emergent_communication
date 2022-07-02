@@ -894,8 +894,8 @@ class SignalingGameModule(pl.LightningModule):
 
         # Language analysis (on train set data)
         language_analysis_results = validation_step_outputs[1]
-        meanings = torch.cat([meaning for meaning, _ in language_analysis_results])
-        messages = torch.cat([message for _, message in language_analysis_results])
+        meanings = torch.cat([meaning.cpu() for meaning, _ in language_analysis_results])
+        messages = torch.cat([message.cpu() for _, message in language_analysis_results])
 
         self.analyze_language(messages, meanings)
 
