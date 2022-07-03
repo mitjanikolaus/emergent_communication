@@ -2,6 +2,7 @@ seed: 1
 model:
   symmetric: false
   optimal_sender: false
+  alt_agents: true
   baseline_type: mean
   length_cost: 0.0
   max_len: 5
@@ -30,7 +31,7 @@ model:
 trainer:
   default_hp_metric: false
   max_epochs: 100000
-  check_val_every_n_epoch: 500
+  check_val_every_n_epoch: 100
   log_every_n_steps: 2
   num_sanity_val_steps: 3
   gpus: 0

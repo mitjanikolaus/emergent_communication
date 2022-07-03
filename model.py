@@ -47,6 +47,256 @@ class LayerNormLSTMCell(jit.ScriptModule):
         return hy, cy
 
 
+class BaseEncoder(nn.Module):
+    """encoder used for both the ModifSender and the ModifReceiver"""
+
+    def __init__(self, input_size, hidden_size):
+        super(BaseEncoder, self).__init__()
+        self.hidden_size = hidden_size
+        self.embedding = nn.Embedding(input_size, hidden_size)
+        self.sem_embedding = nn.Embedding(input_size, hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size)
+
+    def forward(self, input):
+        batch_size = input.size(0)
+        embedded = self.embedding(input)
+        embedded = embedded.view(-1, batch_size, self.hidden_size)
+        hidden = torch.zeros((1, batch_size, self.hidden_size)).type_as(embedded)
+        output, hidden = self.gru(
+            embedded, hidden
+        )  # [seq_len, bs, hid_dim(*2 if bidirectional)]
+        output = output.transpose(1, 0)  # [bs, seq_len, hid_dim(*2 if bidirectional)]
+        sem_embs = self.sem_embedding(input)
+
+        return output, hidden, sem_embs
+
+
+class AttnMasked(nn.Module):
+    """
+    implementation taken from B.Lake's meta_seq2seq code:
+    https://github.com/facebookresearch/meta_seq2seq/blob/59c3b4aafebf387bcd4e45626d8d91b66e6e5dff/model.py#L223
+    """
+
+    def __init__(self):
+        super(AttnMasked, self).__init__()
+
+    def forward(self, Q, K, V, key_length_mask):
+        #
+        # Input
+        #  Q : Matrix of queries; batch_size x n_queries x query_dim
+        #  K : Matrix of keys; batch_size x n_memory x query_dim
+        #  V : Matrix of values; batch_size x n_memory x value_dim
+        #  key_length_mask: mask telling me which positions to ignore (True)
+        #    and which to consider (False),
+        #    the True/False assignment is given by the torch.masked_fill_,
+        #    this method fills in a value for each True position;
+        #    batch_size x
+
+        # Output
+        #  R : soft-retrieval of values; batch_size x n_queries x value_dim
+        #  attn_weights : soft-retrieval of values; batch_size x n_queries x n_memory
+        query_dim = torch.tensor(float(Q.size(2)))
+        if Q.is_cuda:
+            query_dim = query_dim.cuda()
+        attn_weights = torch.bmm(
+            Q, K.transpose(1, 2)
+        )  # batch_size x n_queries x n_memory
+        attn_weights = torch.div(attn_weights, torch.sqrt(query_dim))
+        attn_weights.masked_fill_(key_length_mask, -1000)
+        attn_weights = F.softmax(
+            attn_weights, dim=2
+        )  # batch_size x n_queries x n_memory
+        R = torch.bmm(attn_weights, V)  # batch_size x n_queries x value_dim
+        return R, attn_weights
+
+
+class SenderDecoder(nn.Module):
+    def __init__(self, output_size, hidden_size, max_length):
+        super(SenderDecoder, self).__init__()
+        self.hid_dim = hidden_size
+        self.output_size = output_size
+        self.max_length = max_length
+
+        self.embedding = nn.Embedding(self.output_size + 3, self.hid_dim)
+        # +3 for [fake EOS emb, fake SOS emb, fake EOS semantic emb]
+        self.gru = nn.GRU(self.hid_dim, self.hid_dim)
+        self.attn = AttnMasked()
+        self.out = nn.Linear(self.hid_dim, self.output_size)
+
+    def get_per_step_logits(self, input, hidden, keys, values, length_mask):
+        embedded = self.embedding(input)  # [1, bs, hid_dim]
+        output, hidden = self.gru(
+            embedded, hidden
+        )  # [1, bs, hid_dim], [1, bs, hid_dim]
+        # Attention
+        queries = output.transpose(1, 0)  # [bs, 1, hid_dim]
+        weighted_values, weights = self.attn(
+            queries, keys, values, length_mask
+        )  # [bs, 1, hid_dim], [bs, 1, max_len]
+
+        logits = self.out(weighted_values[:, 0] + output[0])
+        return logits, hidden, weights[:, 0, :]
+
+    def init_batch(self, encoder_outputs, sem_embs):
+        batch_size = encoder_outputs.size(0)
+        input = (
+            torch.zeros(1, batch_size, dtype=torch.long, device=encoder_outputs.device)
+            + self.output_size
+            + 2
+        )  # [1, bs]
+        hidden = torch.zeros(1, batch_size, self.hid_dim, device=encoder_outputs.device)  # [1, bs, hid_dim]
+
+        fake_EOS = self.embedding(
+            torch.zeros(batch_size, 1, dtype=torch.long, device=encoder_outputs.device) + self.output_size
+        )
+        fake_EOS_sem = self.embedding(
+            torch.zeros(batch_size, 1, dtype=torch.long, device=encoder_outputs.device)
+            + self.output_size
+            + 1
+        )
+        keys = torch.cat([encoder_outputs, fake_EOS], dim=1)  # [bs, max_len, hid_dim]
+        values = torch.cat([sem_embs, fake_EOS_sem], dim=1)  # [bs, max_len, hid_dim]
+        length_mask = torch.zeros(
+            batch_size, 1, keys.shape[1], dtype=torch.bool
+        ).type_as(encoder_outputs)
+
+        return batch_size, input, hidden, keys, values, length_mask
+
+    def forward(self, encoder_outputs, sem_embs, lengths=None):
+        bs, input, hidden, keys, values, length_mask = self.init_batch(
+            encoder_outputs, sem_embs
+        )
+        sequence, per_step_logits, entropy, attn_weights = [], [], [], []
+        for _ in range(self.max_length):
+            logits, hidden, weights = self.get_per_step_logits(
+                input, hidden, keys, values, length_mask
+            )
+            distr = Categorical(logits=logits)
+
+            entropy.append(distr.entropy())
+            if self.training:
+                x = distr.sample()
+            else:
+                x = logits.argmax(dim=-1)
+            per_step_logits.append(distr.log_prob(x))
+
+            sequence.append(x)
+            input = x[None]
+            attn_weights.append(weights)
+        zeros = torch.zeros((bs, 1)).type_as(encoder_outputs)
+
+        sequence = torch.stack(sequence, 1)  # [bs, max_len, out_dim]
+        sequence = torch.cat(
+            [sequence, zeros.long()], dim=-1
+        )  # [bs, max_len + 1, out_dim]
+        per_step_logits = torch.cat(
+            [torch.stack(per_step_logits, 1), zeros], dim=-1
+        )  # [bs, max_len + 1, out_dim]
+        entropy = torch.cat(
+            [torch.stack(entropy, 1), zeros], dim=-1
+        )  # [bs, max_len + 1, out_dim]
+        attn_weights = torch.stack(attn_weights, 1)
+
+        return sequence, per_step_logits, entropy, attn_weights
+
+
+class ReceiverDecoder(SenderDecoder):
+    def init_batch(self, encoder_outputs, sem_embs):
+        batch_size = encoder_outputs.size(0)
+        input = (
+            torch.zeros(1, batch_size, dtype=torch.long, device=encoder_outputs.device)
+            + self.output_size
+            + 2
+        )  # [1, bs]
+        hidden = torch.zeros(1, batch_size, self.hid_dim).type_as(encoder_outputs)  # [1, bs, hid_dim]
+        keys = encoder_outputs  # [bs, max_len, hid_dim]
+        values = sem_embs  # [bs, max_len, hid_dim]
+        length_mask = torch.zeros(
+            batch_size, 1, keys.shape[1], dtype=torch.bool, device=encoder_outputs.device)
+
+        return batch_size, input, hidden, keys, values, length_mask
+
+    def forward(self, encoder_outputs, sem_embs, lengths=None):
+
+        batch_size, input, hidden, keys, values, length_mask = self.init_batch(
+            encoder_outputs, sem_embs
+        )
+        # we want to ignore the previous dummy length_mask
+        # length_mask is TRUE for positions which are to be IGNORED
+        length_mask = (
+            torch.arange(encoder_outputs.size(1)).type_as(encoder_outputs)[None, :]
+            >= lengths[:, None]
+        )
+        length_mask = length_mask[:, None, :]  # [bs, 1, max_message_length]
+
+        per_step_logits, attn_weights = [], []
+        for i in range(self.max_length):
+            logits, hidden, weights = self.get_per_step_logits(
+                input, hidden, keys, values, length_mask
+            )
+            per_step_logits.append(logits)
+            attn_weights.append(weights)
+            input = logits.argmax(dim=-1)
+            input = input[None]
+
+        per_step_logits = torch.stack(per_step_logits, 1)  # [bs, n_attrs, n_values]
+        attn_weights = torch.stack(attn_weights, 1)
+
+        top_logits_ = entropy_ = torch.zeros(batch_size).type_as(encoder_outputs)
+        return per_step_logits, top_logits_, entropy_, attn_weights
+
+
+class AltSender(nn.Module):
+    """enc-dec architecture implementing the sender in the communication game"""
+
+    def __init__(self, vocab_size, hidden_size, num_features, num_values, max_len):
+        super(AltSender, self).__init__()
+        self.encoder = BaseEncoder(num_values, hidden_size)
+        self.decoder = SenderDecoder(
+            vocab_size + 1, hidden_size, max_len
+        )
+
+        self.num_features = num_features
+        self.num_values = num_values
+
+    def forward_first_turn(self, x):
+        # change the egg-style format (concatenation of one-hot encodings) to `ordinary`
+        #   input format (vector of indices):
+        batch_size = x.size(0)
+        x = (
+            x.view(batch_size * self.num_features, self.num_values)
+            .nonzero()[:, 1]
+            .view(batch_size, self.num_features)
+        )
+
+        enc_output, hidden, sem_embs = self.encoder(x)
+        sequence, top_logits, entropy, attn_weights = self.decoder(
+            enc_output, sem_embs
+        )
+        return sequence, top_logits, entropy
+
+
+class AltReceiver(nn.Module):
+
+    def __init__(self, vocab_size, hidden_size, num_features, num_values):
+        super(AltReceiver, self).__init__()
+        self.encoder = BaseEncoder(vocab_size + 1, hidden_size)
+        self.decoder = ReceiverDecoder(
+            num_values, hidden_size, num_features
+        )
+
+        self.num_features = num_features
+        self.num_values = num_values
+
+    def forward_first_turn(self, message, message_lengths):
+        enc_output, hidden, sem_embs = self.encoder(message)
+        per_step_logits, logits, entropy, attn_weights = self.decoder(
+            enc_output, sem_embs, message_lengths
+        )
+        per_step_logits = per_step_logits.view(-1, self.num_features * self.num_values)
+        return per_step_logits, None, logits, entropy
+
+
 class Receiver(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, n_features, n_values, layer_norm, num_layers
@@ -622,28 +872,46 @@ class SignalingGameModule(pl.LightningModule):
                     ]
                 )
             else:
-                self.senders = ModuleList(
+                if self.model_hparams.alt_agents:
+                    self.senders = ModuleList(
+                        [
+                            AltSender(
+                                self.model_hparams.vocab_size, self.model_hparams.sender_hidden_dim,
+                                self.model_hparams.num_features, self.model_hparams.num_values,
+                                self.model_hparams.max_len
+                                )
+                            for _ in range(self.model_hparams.num_senders)
+                        ]
+                    )
+                else:
+                    self.senders = ModuleList(
+                        [
+                            Sender(
+                                   self.model_hparams.num_features, self.model_hparams.num_values,
+                                   self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
+                                   self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
+                                   self.model_hparams.sender_layer_norm, self.model_hparams.sender_num_layers)
+                            for _ in range(self.model_hparams.num_senders)
+                        ]
+                    )
+            if self.model_hparams.alt_agents:
+                self.receivers = ModuleList(
                     [
-                        Sender(
-                               self.model_hparams.num_features, self.model_hparams.num_values,
-                               self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
-                               self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
-                               self.model_hparams.sender_layer_norm, self.model_hparams.sender_num_layers)
-                        for _ in range(self.model_hparams.num_senders)
+                        AltReceiver(self.model_hparams.vocab_size, self.model_hparams.receiver_hidden_dim,
+                                    self.model_hparams.num_features, self.model_hparams.num_values)
+                        for _ in range(self.model_hparams.num_receivers)
                     ]
                 )
-            self.init_receivers()
-
-    def init_receivers(self):
-        self.receivers = ModuleList(
-            [
-                Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
-                         self.model_hparams.receiver_hidden_dim, self.model_hparams.max_len,
-                         self.model_hparams.num_features, self.model_hparams.num_values,
-                         self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
-                for _ in range(self.model_hparams.num_receivers)
-            ]
-        )
+            else:
+                self.receivers = ModuleList(
+                    [
+                        Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
+                                 self.model_hparams.receiver_hidden_dim, self.model_hparams.max_len,
+                                 self.model_hparams.num_features, self.model_hparams.num_values,
+                                 self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
+                        for _ in range(self.model_hparams.num_receivers)
+                    ]
+                )
 
     def init_MLP_receivers(self):
         self.receivers = ModuleList(
@@ -731,7 +999,7 @@ class SignalingGameModule(pl.LightningModule):
 
         messages_sender_1, log_prob_s, entropy_s = sender.forward_first_turn(sender_input)
         messages_sender_1_lengths = find_lengths(messages_sender_1)
-        self.log(f"message_lengths", messages_sender_1_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"message_lengths", messages_sender_1_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         if self.model_hparams["noise"] > 0:
             # TODO: allow that 0s are replaced?
@@ -747,11 +1015,11 @@ class SignalingGameModule(pl.LightningModule):
 
         if self.model_hparams.multi_turn:
             messages_receiver_1_lengths = find_lengths(messages_receiver_1)
-            self.log(f"message_lengths_receiver", messages_receiver_1_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+            self.log(f"message_lengths_receiver", messages_receiver_1_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
 
             messages_sender_2, log_prob_s_2, entropy_s_2 = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
             messages_sender_2_lengths = find_lengths(messages_sender_2)
-            self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+            self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
 
             if self.model_hparams["noise"] > 0:
                 # TODO: allow that 0s are replaced?
@@ -796,10 +1064,10 @@ class SignalingGameModule(pl.LightningModule):
         effective_log_prob_s_1 = torch.zeros(batch_size).type_as(sender_input)
 
         for i in range(messages_sender_1.size(1)):
-            not_eosed = (i < messages_sender_1_lengths.add(1)).float()
+            not_eosed = (i < messages_sender_1_lengths).float()
             effective_entropy_s_1 += entropy_s[:, i] * not_eosed
             effective_log_prob_s_1 += log_prob_s[:, i] * not_eosed
-        effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_1_lengths.add(1).float()
+        effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_1_lengths.float()
 
         weighted_entropy = effective_entropy_s_1.mean() * self.sender_entropy_coeff
         log_prob = effective_log_prob_s_1
@@ -809,18 +1077,18 @@ class SignalingGameModule(pl.LightningModule):
             effective_entropy_s_2 = torch.zeros(batch_size).type_as(sender_input)
             effective_log_prob_s_2 = torch.zeros(batch_size).type_as(sender_input)
             for i in range(messages_sender_2.size(1)):
-                not_eosed = (i < messages_sender_2_lengths.add(1)).float()
+                not_eosed = (i < messages_sender_2_lengths).float()
                 effective_entropy_s_2 += entropy_s_2[:, i] * not_eosed
                 effective_log_prob_s_2 += log_prob_s_2[:, i] * not_eosed
-            effective_entropy_s_2 = effective_entropy_s_2 / messages_sender_2_lengths.add(1).float()
+            effective_entropy_s_2 = effective_entropy_s_2 / messages_sender_2_lengths.float()
 
             effective_entropy_r = torch.zeros(batch_size).type_as(sender_input)
             effective_log_prob_r = torch.zeros(batch_size).type_as(sender_input)
             for i in range(messages_receiver_1.size(1)):
-                not_eosed = (i < messages_receiver_1_lengths.add(1)).float()
+                not_eosed = (i < messages_receiver_1_lengths).float()
                 effective_entropy_r += entropy_r[:, i] * not_eosed
                 effective_log_prob_r += log_prob_r[:, i] * not_eosed
-            effective_entropy_r = effective_entropy_r / messages_receiver_1_lengths.add(1).float()
+            effective_entropy_r = effective_entropy_r / messages_receiver_1_lengths.float()
 
             weighted_entropy = (effective_entropy_s_1.mean() * self.sender_entropy_coeff
                                 + effective_entropy_s_2.mean() * self.sender_entropy_coeff

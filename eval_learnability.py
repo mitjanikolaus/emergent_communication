@@ -42,8 +42,6 @@ def run(args):
         model.model_hparams['receiver_aux_loss'] = False
         model.model_hparams['receiver_embed_dim'] = 32
         # model.model_hparams['receiver_hidden_dim'] = 32
-    else:
-        model.init_receivers()
 
     # Freeze senders
     model.freeze_senders()
