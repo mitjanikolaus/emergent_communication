@@ -1010,7 +1010,7 @@ class SignalingGameModule(pl.LightningModule):
                                         messages_sender_1.shape[0] * messages_sender_1.shape[1], replacement=True)
             indices = indices.reshape(messages_sender_1.shape[0], messages_sender_1.shape[1])
             # Replace all randomly selected values (but only if they are not EOS symbols (0))
-            messages_sender_1[(indices == 1) & (messages_sender_1 != 0)] = self.token_noise
+            messages_sender_1[(indices == 1) & (messages_sender_1.to(indices.device) != 0)] = self.token_noise
 
         receiver_output_1, messages_receiver_1, log_prob_r, entropy_r = receiver.forward_first_turn(
             messages_sender_1, messages_sender_1_lengths
@@ -1030,7 +1030,7 @@ class SignalingGameModule(pl.LightningModule):
                                             messages_sender_2.shape[0] * messages_sender_2.shape[1], replacement=True)
                 indices = indices.reshape(messages_sender_2.shape[0], messages_sender_2.shape[1])
                 # Replace all randomly selected values (but only if they are not EOS symbols (0))
-                messages_sender_2[(indices == 1) & (messages_sender_2 != 0)] = self.token_noise
+                messages_sender_2[(indices == 1) & (messages_sender_2.to(indices.device) != 0)] = self.token_noise
 
             receiver_output_2 = receiver.forward_second_turn(messages_sender_1, messages_sender_2, messages_sender_1_lengths, messages_sender_2_lengths)
             receiver_output_2 = receiver_output_2.view(batch_size, self.num_features, self.num_values)
