@@ -112,6 +112,3 @@ venv.bak/
 out/
 data/
 lightning_logs/
-
-# Tensorboard
-tensorboard.ipynb
