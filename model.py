@@ -1054,7 +1054,9 @@ class SignalingGameModule(pl.LightningModule):
         if self.model_hparams.multi_turn:
             receiver_output_2 = receiver_output_2.view(batch_size * self.num_features, self.num_values)
             receiver_loss_2 = F.cross_entropy(receiver_output_2, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
-            receiver_loss += receiver_loss_2
+            receiver_loss = receiver_loss_2
+            if self.model_hparams.receiver_aux_loss:
+                receiver_loss += receiver_loss
 
         self.log(f"receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
