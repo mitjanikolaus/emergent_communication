@@ -995,7 +995,7 @@ class SignalingGameModule(pl.LightningModule):
         # self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
     def forward(
-        self, sender_input, sender_idx, receiver_idx, return_messages=False
+        self, sender_input, sender_idx, receiver_idx, return_messages=False, disable_noise=False
     ):
         sender = self.senders[sender_idx]
         receiver = self.receivers[receiver_idx]
@@ -1005,7 +1005,7 @@ class SignalingGameModule(pl.LightningModule):
         messages_sender_1_lengths = find_lengths(messages_sender_1)
         self.log(f"message_lengths", messages_sender_1_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        if self.model_hparams["noise"] > 0:
+        if self.model_hparams["noise"] > 0 and not disable_noise:
             # TODO: allow that 0s are replaced?
             indices = torch.multinomial(torch.tensor([1 - self.model_hparams["noise"], self.model_hparams["noise"]]),
                                         messages_sender_1.shape[0] * messages_sender_1.shape[1], replacement=True)
@@ -1025,7 +1025,7 @@ class SignalingGameModule(pl.LightningModule):
             messages_sender_2_lengths = find_lengths(messages_sender_2)
             self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
 
-            if self.model_hparams["noise"] > 0:
+            if self.model_hparams["noise"] > 0 and not disable_noise:
                 # TODO: allow that 0s are replaced?
                 indices = torch.multinomial(torch.tensor([1 - self.model_hparams["noise"], self.model_hparams["noise"]]),
                                             messages_sender_2.shape[0] * messages_sender_2.shape[1], replacement=True)
@@ -1154,8 +1154,10 @@ class SignalingGameModule(pl.LightningModule):
             # Generalization
             receiver_idx = self.val_epoch_receiver_idx
 
-            _, acc, _ = self.forward(sender_input, sender_idx, receiver_idx, return_messages=True)
-            return acc
+            _, acc = self.forward(sender_input, sender_idx, receiver_idx)
+            _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
+
+            return acc, acc_no_noise
 
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
@@ -1166,9 +1168,12 @@ class SignalingGameModule(pl.LightningModule):
 
     def validation_epoch_end(self, validation_step_outputs):
         # Generalization:
-        accs = validation_step_outputs[0]
-        test_acc = torch.cat(accs).mean().item()
+        accs = torch.cat([acc for acc, _ in validation_step_outputs[0]])
+        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[0]])
+        test_acc = accs.mean().item()
+        test_acc_no_noise = accs_no_noise.mean().item()
         self.log("test_acc", test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log("test_acc_no_noise", test_acc_no_noise, prog_bar=True, logger=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
 
         # Language analysis (on train set data)
