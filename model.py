@@ -1006,11 +1006,11 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"message_lengths", messages_sender_1_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
 
         if self.model_hparams["noise"] > 0 and not disable_noise:
-            # TODO: allow that 0s are replaced?
-            indices = torch.multinomial(torch.tensor([1 - self.model_hparams["noise"], self.model_hparams["noise"]]),
+            indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
                                         messages_sender_1.shape[0] * messages_sender_1.shape[1], replacement=True)
             indices = indices.reshape(messages_sender_1.shape[0], messages_sender_1.shape[1])
-            messages_sender_1[indices == 1] = self.token_noise
+            # Replace all randomly selected values (but only if they are not EOS symbols (0))
+            messages_sender_1[(indices == 1) & (messages_sender_1 != 0)] = self.token_noise
 
         receiver_output_1, messages_receiver_1, log_prob_r, entropy_r = receiver.forward_first_turn(
             messages_sender_1, messages_sender_1_lengths
@@ -1026,11 +1026,11 @@ class SignalingGameModule(pl.LightningModule):
             self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
 
             if self.model_hparams["noise"] > 0 and not disable_noise:
-                # TODO: allow that 0s are replaced?
-                indices = torch.multinomial(torch.tensor([1 - self.model_hparams["noise"], self.model_hparams["noise"]]),
+                indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
                                             messages_sender_2.shape[0] * messages_sender_2.shape[1], replacement=True)
                 indices = indices.reshape(messages_sender_2.shape[0], messages_sender_2.shape[1])
-                messages_sender_2[indices == 1] = self.token_noise
+                # Replace all randomly selected values (but only if they are not EOS symbols (0))
+                messages_sender_2[(indices == 1) & (messages_sender_2 != 0)] = self.token_noise
 
             receiver_output_2 = receiver.forward_second_turn(messages_sender_1, messages_sender_2, messages_sender_1_lengths, messages_sender_2_lengths)
             receiver_output_2 = receiver_output_2.view(batch_size, self.num_features, self.num_values)
