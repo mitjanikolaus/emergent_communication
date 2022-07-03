@@ -334,6 +334,8 @@ class Receiver(nn.Module):
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
+        self.attn = nn.Linear(hidden_size*2, hidden_size*2)
+
     def forward_first_turn(self, messages, message_lengths):
         # Encode message
         batch_size = messages.shape[0]
@@ -355,8 +357,8 @@ class Receiver(nn.Module):
                 lstm_input = h_t
 
             hidden_states[:, step] = h_t
-
-        encoded_message = hidden_states[range(batch_size), message_lengths]
+        # TODO: verify message lengths
+        encoded_message = hidden_states[range(batch_size), message_lengths-1]
 
         output = self.linear_out(encoded_message)
 
@@ -427,10 +429,12 @@ class Receiver(nn.Module):
 
                 hidden_states[:, step] = h_t
 
-            encoded_message = hidden_states[range(batch_size), message_lengths]
+            encoded_message = hidden_states[range(batch_size), message_lengths-1]
             encoded_messages.append(encoded_message)
 
-        encoded_messages = encoded_messages[0] + encoded_messages[1]
+        encoded_messages = torch.cat((encoded_messages[0], encoded_messages[1]), dim=-1)
+        attn_weights = F.softmax(self.attn(encoded_messages).reshape(batch_size, self.hidden_size, 2), dim=-1)
+        encoded_messages = torch.sum(attn_weights * encoded_messages.reshape(batch_size, 512, -1), dim=-1)
         output = self.linear_out(encoded_messages)
 
         return output
@@ -575,7 +579,7 @@ class Sender(pl.LightningModule):
 
         hidden_states[:, step] = h_t
 
-        encoded_message = hidden_states[range(batch_size), message_lengths]
+        encoded_message = hidden_states[range(batch_size), message_lengths-1]
 
         input = self.embed_input_lstm(encoded_message)
 
