@@ -1,10 +1,10 @@
-seed: 2
+seed: 1
 model:
   symmetric: false
   optimal_sender: false
   baseline_type: mean
   length_cost: 0.0
-  max_len: 4
+  max_len: 5
   num_features: 4
   num_values: 4
   num_senders: 1
@@ -24,7 +24,7 @@ model:
   sender_learning_speed: 1
   vocab_size: 5
   noise: 0.0
-  multi_turn: true
+  multi_turn: false
   log_topsim_on_validation: true
   log_entropy_on_validation: false
 trainer:
