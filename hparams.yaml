@@ -3,15 +3,15 @@ model:
   symmetric: false
   optimal_sender: false
   baseline_type: mean
-  length_cost: 0.05
-  max_len: 3
-  num_features: 2
-  num_values: 100
+  length_cost: 0.0
+  max_len: 4
+  num_features: 4
+  num_values: 4
   num_senders: 1
   num_receivers: 1
   receiver_embed_dim: 128
   receiver_num_layers: 1
-  receiver_hidden_dim: 128
+  receiver_hidden_dim: 512
   receiver_learning_speed: 1
   receiver_aux_loss: true
   sender_embed_dim: 128
@@ -20,10 +20,11 @@ model:
   sender_num_layers: 1
   receiver_layer_norm: true
   sender_layer_norm: true
-  sender_hidden_dim: 128
+  sender_hidden_dim: 512
   sender_learning_speed: 1
-  vocab_size: 100
-  noise: 0.1
+  vocab_size: 5
+  noise: 0.0
+  multi_turn: true
   log_topsim_on_validation: true
   log_entropy_on_validation: false
 trainer:

@@ -727,6 +727,7 @@ class SignalingGameModule(pl.LightningModule):
     ):
         sender = self.senders[sender_idx]
         receiver = self.receivers[receiver_idx]
+        batch_size = sender_input.shape[0]
 
         messages_sender_1, log_prob_s, entropy_s = sender.forward_first_turn(sender_input)
         messages_sender_1_lengths = find_lengths(messages_sender_1)
@@ -742,44 +743,46 @@ class SignalingGameModule(pl.LightningModule):
         receiver_output_1, messages_receiver_1, log_prob_r, entropy_r = receiver.forward_first_turn(
             messages_sender_1, messages_sender_1_lengths
         )
-        messages_receiver_1_lengths = find_lengths(messages_receiver_1)
-        self.log(f"message_lengths_receiver", messages_receiver_1_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        receiver_output_1 = receiver_output_1.view(batch_size, self.num_features, self.num_values)
 
-        messages_sender_2, log_prob_s_2, entropy_s_2 = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
-        messages_sender_2_lengths = find_lengths(messages_sender_2)
-        self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        if self.model_hparams.multi_turn:
+            messages_receiver_1_lengths = find_lengths(messages_receiver_1)
+            self.log(f"message_lengths_receiver", messages_receiver_1_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        if self.model_hparams["noise"] > 0:
-            # TODO: allow that 0s are replaced?
-            indices = torch.multinomial(torch.tensor([1 - self.model_hparams["noise"], self.model_hparams["noise"]]),
-                                        messages_sender_2.shape[0] * messages_sender_2.shape[1], replacement=True)
-            indices = indices.reshape(messages_sender_2.shape[0], messages_sender_2.shape[1])
-            messages_sender_2[indices == 1] = self.token_noise
+            messages_sender_2, log_prob_s_2, entropy_s_2 = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
+            messages_sender_2_lengths = find_lengths(messages_sender_2)
+            self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        receiver_output_2 = receiver.forward_second_turn(messages_sender_1, messages_sender_2, messages_sender_1_lengths, messages_sender_2_lengths)
+            if self.model_hparams["noise"] > 0:
+                # TODO: allow that 0s are replaced?
+                indices = torch.multinomial(torch.tensor([1 - self.model_hparams["noise"], self.model_hparams["noise"]]),
+                                            messages_sender_2.shape[0] * messages_sender_2.shape[1], replacement=True)
+                indices = indices.reshape(messages_sender_2.shape[0], messages_sender_2.shape[1])
+                messages_sender_2[indices == 1] = self.token_noise
+
+            receiver_output_2 = receiver.forward_second_turn(messages_sender_1, messages_sender_2, messages_sender_1_lengths, messages_sender_2_lengths)
+            receiver_output_2 = receiver_output_2.view(batch_size, self.num_features, self.num_values)
 
         # TODO verify
-        batch_size = sender_input.shape[0]
-        sender_input = sender_input.view(
-            batch_size, self.num_features, self.num_values)
-        receiver_output_1 = receiver_output_1.view(
-            batch_size, self.num_features, self.num_values)
-        receiver_output_2 = receiver_output_2.view(
-            batch_size, self.num_features, self.num_values)
+        sender_input = sender_input.view(batch_size, self.num_features, self.num_values)
         acc_first_turn = (torch.sum((receiver_output_1.argmax(dim=-1) == sender_input.argmax(dim=-1)
                           ).detach(), dim=1) == self.num_features).float()
         self.log(f"acc_first_turn", acc_first_turn.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        acc = (torch.sum((receiver_output_2.argmax(dim=-1) == sender_input.argmax(dim=-1)
+        if self.model_hparams.multi_turn:
+            acc = (torch.sum((receiver_output_2.argmax(dim=-1) == sender_input.argmax(dim=-1)
                           ).detach(), dim=1) == self.num_features).float()
+        else:
+            acc = acc_first_turn
 
         receiver_output_1 = receiver_output_1.view(batch_size * self.num_features, self.num_values)
-        receiver_output_2 = receiver_output_2.view(batch_size * self.num_features, self.num_values)
 
         labels = sender_input.argmax(dim=-1).view(batch_size * self.num_features)
-        receiver_loss_1 = F.cross_entropy(receiver_output_1, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
-        receiver_loss_2 = F.cross_entropy(receiver_output_2, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
-        receiver_loss = receiver_loss_1 + receiver_loss_2
+        receiver_loss = F.cross_entropy(receiver_output_1, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
+        if self.model_hparams.multi_turn:
+            receiver_output_2 = receiver_output_2.view(batch_size * self.num_features, self.num_values)
+            receiver_loss_2 = F.cross_entropy(receiver_output_2, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
+            receiver_loss += receiver_loss_2
 
         self.log(f"receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
@@ -798,35 +801,37 @@ class SignalingGameModule(pl.LightningModule):
             effective_log_prob_s_1 += log_prob_s[:, i] * not_eosed
         effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_1_lengths.add(1).float()
 
-        effective_entropy_s_2 = torch.zeros(batch_size).type_as(sender_input)
-        effective_log_prob_s_2 = torch.zeros(batch_size).type_as(sender_input)
-        for i in range(messages_sender_2.size(1)):
-            not_eosed = (i < messages_sender_2_lengths.add(1)).float()
-            effective_entropy_s_2 += entropy_s_2[:, i] * not_eosed
-            effective_log_prob_s_2 += log_prob_s_2[:, i] * not_eosed
-        effective_entropy_s_2 = effective_entropy_s_2 / messages_sender_2_lengths.add(1).float()
+        weighted_entropy = effective_entropy_s_1.mean() * self.sender_entropy_coeff
+        log_prob = effective_log_prob_s_1
+        message_lengths = messages_sender_1_lengths
 
-        effective_entropy_r = torch.zeros(batch_size).type_as(sender_input)
-        effective_log_prob_r = torch.zeros(batch_size).type_as(sender_input)
-        for i in range(messages_receiver_1.size(1)):
-            not_eosed = (i < messages_receiver_1_lengths.add(1)).float()
-            effective_entropy_r += entropy_r[:, i] * not_eosed
-            effective_log_prob_r += log_prob_r[:, i] * not_eosed
-        effective_entropy_r = effective_entropy_r / messages_receiver_1_lengths.add(1).float()
+        if self.model_hparams.multi_turn:
+            effective_entropy_s_2 = torch.zeros(batch_size).type_as(sender_input)
+            effective_log_prob_s_2 = torch.zeros(batch_size).type_as(sender_input)
+            for i in range(messages_sender_2.size(1)):
+                not_eosed = (i < messages_sender_2_lengths.add(1)).float()
+                effective_entropy_s_2 += entropy_s_2[:, i] * not_eosed
+                effective_log_prob_s_2 += log_prob_s_2[:, i] * not_eosed
+            effective_entropy_s_2 = effective_entropy_s_2 / messages_sender_2_lengths.add(1).float()
 
-        weighted_entropy = (
-                effective_entropy_s_1.mean() * self.sender_entropy_coeff
-                + effective_entropy_s_2.mean() * self.sender_entropy_coeff
-                + effective_entropy_r.mean() * self.receiver_entropy_coeff
-        )
+            effective_entropy_r = torch.zeros(batch_size).type_as(sender_input)
+            effective_log_prob_r = torch.zeros(batch_size).type_as(sender_input)
+            for i in range(messages_receiver_1.size(1)):
+                not_eosed = (i < messages_receiver_1_lengths.add(1)).float()
+                effective_entropy_r += entropy_r[:, i] * not_eosed
+                effective_log_prob_r += log_prob_r[:, i] * not_eosed
+            effective_entropy_r = effective_entropy_r / messages_receiver_1_lengths.add(1).float()
+
+            weighted_entropy = (effective_entropy_s_1.mean() * self.sender_entropy_coeff
+                                + effective_entropy_s_2.mean() * self.sender_entropy_coeff
+                                + effective_entropy_r.mean() * self.receiver_entropy_coeff)
+            log_prob = effective_log_prob_s_1 + effective_log_prob_s_2 + effective_log_prob_r
+            message_lengths = messages_sender_1_lengths + messages_receiver_1_lengths + messages_sender_2_lengths
 
         # self.log(f"effective_log_prob_s", effective_log_prob_s_1.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
         self.log(f"weighted_entropy", weighted_entropy.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
 
-        log_prob = effective_log_prob_s_1 + effective_log_prob_s_2 + effective_log_prob_r
-
-        combined_message_lengths = messages_sender_1_lengths + messages_receiver_1_lengths + messages_sender_2_lengths
-        length_loss = combined_message_lengths.float() * self.length_cost
+        length_loss = message_lengths.float() * self.length_cost
 
         policy_length_loss = (
             (length_loss - self.baselines["length"].predict(length_loss))
