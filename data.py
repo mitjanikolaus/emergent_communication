@@ -27,7 +27,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.test_dataset = SignalingGameDataset(objects_test)
 
     def train_dataloader(self):
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
 
     def val_dataloader(self):
         generalization_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size,
