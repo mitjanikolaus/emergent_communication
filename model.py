@@ -1002,7 +1002,7 @@ class SignalingGameModule(pl.LightningModule):
         sender = self.senders[sender_idx]
         receiver = self.receivers[receiver_idx]
         batch_size = sender_input.shape[0]
-        loss = torch.zeros(batch_size)
+        loss = torch.zeros(batch_size).to(sender_input.device)
 
         messages_sender_1, log_prob_s, entropy_s = sender.forward_first_turn(sender_input)
         messages_sender_1_lengths = find_lengths(messages_sender_1)
