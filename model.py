@@ -485,6 +485,8 @@ class Sender(pl.LightningModule):
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding = nn.Embedding(vocab_size, embed_dim)
 
+        self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
+
         self.hidden_size = hidden_size
         self.embed_dim = embed_dim
         self.vocab_size = vocab_size
@@ -622,7 +624,9 @@ class Sender(pl.LightningModule):
         logits = torch.cat([logits, zeros], dim=1)
         entropy = torch.cat([entropy, zeros], dim=1)
 
-        return sequence, logits, entropy
+        output_noise_location = self.linear_predict_noise_loc(encoded_message)
+
+        return sequence, logits, entropy, output_noise_location
 
 
 class OptimalSender(pl.LightningModule):
@@ -990,9 +994,7 @@ class SignalingGameModule(pl.LightningModule):
         if perform_receiver_update:
             opt_receiver.step()
 
-        self.log(f"train_acc", acc.float().mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-
-        # self.log(f"train_loss", loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"train_acc", acc.float().mean(), prog_bar=True, add_dataloader_idx=False)
 
     def forward(
         self, sender_input, sender_idx, receiver_idx, return_messages=False, disable_noise=False
@@ -1000,17 +1002,14 @@ class SignalingGameModule(pl.LightningModule):
         sender = self.senders[sender_idx]
         receiver = self.receivers[receiver_idx]
         batch_size = sender_input.shape[0]
+        loss = torch.zeros(batch_size)
 
         messages_sender_1, log_prob_s, entropy_s = sender.forward_first_turn(sender_input)
         messages_sender_1_lengths = find_lengths(messages_sender_1)
-        self.log(f"message_lengths", messages_sender_1_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"message_lengths", messages_sender_1_lengths.type(torch.float).mean() - 1)
 
-        if self.model_hparams["noise"] > 0 and not disable_noise:
-            indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
-                                        messages_sender_1.shape[0] * messages_sender_1.shape[1], replacement=True)
-            indices = indices.reshape(messages_sender_1.shape[0], messages_sender_1.shape[1])
-            # Replace all randomly selected values (but only if they are not EOS symbols (0))
-            messages_sender_1[(indices == 1) & (messages_sender_1.to(indices.device) != 0)] = self.token_noise
+        if not disable_noise:
+            messages_sender_1 = self.add_noise(messages_sender_1)
 
         receiver_output_1, messages_receiver_1, log_prob_r, entropy_r = receiver.forward_first_turn(
             messages_sender_1, messages_sender_1_lengths
@@ -1019,18 +1018,20 @@ class SignalingGameModule(pl.LightningModule):
 
         if self.model_hparams.multi_turn:
             messages_receiver_1_lengths = find_lengths(messages_receiver_1)
-            self.log(f"message_lengths_receiver", messages_receiver_1_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
+            self.log(f"message_lengths_receiver", messages_receiver_1_lengths.type(torch.float).mean() - 1)
 
-            messages_sender_2, log_prob_s_2, entropy_s_2 = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
+            messages_sender_2, log_prob_s_2, entropy_s_2, out_noise_loc = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
+            if self.model_hparams.sender_aux_loss and not disable_noise:
+                labels_noise_loc = torch.nonzero(messages_sender_1 == self.token_noise)[:, 1]
+                sender_aux_loss = F.cross_entropy(out_noise_loc, labels_noise_loc, reduction="none")
+                self.log(f"sender_aux_loss", sender_aux_loss.mean(), add_dataloader_idx=False)
+                loss += sender_aux_loss
+
             messages_sender_2_lengths = find_lengths(messages_sender_2)
-            self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean() - 1, prog_bar=True, logger=True, add_dataloader_idx=False)
+            self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean() - 1)
 
-            if self.model_hparams["noise"] > 0 and not disable_noise:
-                indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
-                                            messages_sender_2.shape[0] * messages_sender_2.shape[1], replacement=True)
-                indices = indices.reshape(messages_sender_2.shape[0], messages_sender_2.shape[1])
-                # Replace all randomly selected values (but only if they are not EOS symbols (0))
-                messages_sender_2[(indices == 1) & (messages_sender_2.to(indices.device) != 0)] = self.token_noise
+            if not disable_noise:
+                messages_sender_2 = self.add_noise(messages_sender_2)
 
             receiver_output_2 = receiver.forward_second_turn(messages_sender_1, messages_sender_2, messages_sender_1_lengths, messages_sender_2_lengths)
             receiver_output_2 = receiver_output_2.view(batch_size, self.num_features, self.num_values)
@@ -1039,7 +1040,7 @@ class SignalingGameModule(pl.LightningModule):
         sender_input = sender_input.view(batch_size, self.num_features, self.num_values)
         acc_first_turn = (torch.sum((receiver_output_1.argmax(dim=-1) == sender_input.argmax(dim=-1)
                           ).detach(), dim=1) == self.num_features).float()
-        self.log(f"acc_first_turn", acc_first_turn.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"acc_first_turn", acc_first_turn.mean())
 
         if self.model_hparams.multi_turn:
             acc = (torch.sum((receiver_output_2.argmax(dim=-1) == sender_input.argmax(dim=-1)
@@ -1050,17 +1051,19 @@ class SignalingGameModule(pl.LightningModule):
         receiver_output_1 = receiver_output_1.view(batch_size * self.num_features, self.num_values)
 
         labels = sender_input.argmax(dim=-1).view(batch_size * self.num_features)
-        receiver_loss = F.cross_entropy(receiver_output_1, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
+        receiver_loss_1 = F.cross_entropy(receiver_output_1, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
+        receiver_loss = receiver_loss_1
         if self.model_hparams.multi_turn:
             receiver_output_2 = receiver_output_2.view(batch_size * self.num_features, self.num_values)
             receiver_loss_2 = F.cross_entropy(receiver_output_2, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
             receiver_loss = receiver_loss_2
             if self.model_hparams.receiver_aux_loss:
-                receiver_loss += receiver_loss
+                receiver_loss += receiver_loss_1
 
-        self.log(f"receiver_loss", receiver_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"receiver_loss", receiver_loss.mean())
 
         assert len(receiver_loss) == batch_size
+        loss += receiver_loss
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
         effective_entropy_s_1 = torch.zeros(batch_size).type_as(sender_input)
@@ -1102,8 +1105,8 @@ class SignalingGameModule(pl.LightningModule):
             log_prob = effective_log_prob_s_1 + effective_log_prob_s_2 + effective_log_prob_r
             message_lengths = messages_sender_1_lengths + messages_receiver_1_lengths + messages_sender_2_lengths
 
-        # self.log(f"effective_log_prob_s", effective_log_prob_s_1.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-        self.log(f"weighted_entropy", weighted_entropy.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        # self.log(f"effective_log_prob_s", effective_log_prob_s_1.mean(), add_dataloader_idx=False)
+        self.log(f"weighted_entropy", weighted_entropy.mean())
 
         length_loss = message_lengths.float() * self.length_cost
 
@@ -1111,27 +1114,39 @@ class SignalingGameModule(pl.LightningModule):
             (length_loss - self.baselines["length"].predict(length_loss))
             * log_prob
         ).mean()
-        loss_baseline = self.baselines["loss"].predict(receiver_loss.detach())
+        loss_baseline = self.baselines["loss"].predict(loss.detach())
         policy_loss = (
-            (receiver_loss.detach() - loss_baseline) * log_prob
+            (loss.detach() - loss_baseline) * log_prob
         ).mean()
 
-        self.log(f"policy_loss", policy_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
-        self.log(f"policy_length_loss", policy_length_loss.mean(), prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log(f"policy_loss", policy_loss.mean())
+        self.log(f"policy_length_loss", policy_length_loss.mean())
 
         optimized_loss = policy_length_loss + policy_loss - weighted_entropy
 
-        # add the receiver loss
-        optimized_loss += receiver_loss.mean()
+        # add the differentiable loss
+        optimized_loss += loss.mean()
 
         if self.training:
-            self.baselines["loss"].update(receiver_loss)
+            self.baselines["loss"].update(loss)
             self.baselines["length"].update(length_loss)
 
         if return_messages:
             return optimized_loss, acc, messages_sender_1
         else:
             return optimized_loss, acc
+
+    def add_noise(self, messages):
+        if self.model_hparams.noise == "one_symbol":
+            indices = torch.randint(0, messages.size(1)-1, (messages.size(0),))
+            messages[range(messages.size(0)), indices] = self.token_noise
+        else:
+            if self.model_hparams.noise > 0:
+                indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]), messages.shape[0] * messages.shape[1], replacement=True)
+                indices = indices.reshape(messages.shape[0], messages.shape[1])
+                # Replace all randomly selected values (but only if they are not EOS symbols (0))
+                messages[(indices == 1) & (messages.to(indices.device) != 0)] = self.token_noise
+        return messages
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
@@ -1150,10 +1165,9 @@ class SignalingGameModule(pl.LightningModule):
 
     def validation_step(self, sender_input, batch_idx, dataloader_idx):
         sender_idx = self.val_epoch_sender_idx
+        receiver_idx = self.val_epoch_receiver_idx
         if dataloader_idx == 0:
             # Generalization
-            receiver_idx = self.val_epoch_receiver_idx
-
             _, acc = self.forward(sender_input, sender_idx, receiver_idx)
             _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
 
@@ -1163,8 +1177,10 @@ class SignalingGameModule(pl.LightningModule):
             # Language analysis (on train set data)
             sender = self.senders[sender_idx]
 
+            _, acc_no_noise, messages = self.forward(sender_input, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
+
             messages, _, _ = sender.forward_first_turn(sender_input)
-            return sender_input, messages
+            return sender_input, messages, acc_no_noise
 
     def validation_epoch_end(self, validation_step_outputs):
         # Generalization:
@@ -1172,20 +1188,22 @@ class SignalingGameModule(pl.LightningModule):
         accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[0]])
         test_acc = accs.mean().item()
         test_acc_no_noise = accs_no_noise.mean().item()
-        self.log("test_acc", test_acc, prog_bar=True, logger=True, add_dataloader_idx=False)
-        self.log("test_acc_no_noise", test_acc_no_noise, prog_bar=True, logger=True, add_dataloader_idx=False)
+        self.log("test_acc", test_acc, prog_bar=True, add_dataloader_idx=False)
+        self.log("test_acc_no_noise", test_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
 
         # Language analysis (on train set data)
         language_analysis_results = validation_step_outputs[1]
-        meanings = torch.cat([meaning.cpu() for meaning, _ in language_analysis_results])
-        messages = torch.cat([message.cpu() for _, message in language_analysis_results])
+        train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
+        self.log("train_acc_no_noise", train_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
 
+        meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
+        messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
         self.analyze_language(messages, meanings)
 
     def analyze_language(self, messages, meanings):
         num_unique_messages = len(messages.unique(dim=0))
-        self.log("num_unique_messages", float(num_unique_messages), prog_bar=True, logger=True)
+        self.log("num_unique_messages", float(num_unique_messages))
 
         meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
 
@@ -1197,12 +1215,12 @@ class SignalingGameModule(pl.LightningModule):
 
         if self.model_hparams.log_entropy_on_validation:
             entropy = compute_entropy(messages)
-            self.log("message_entropy", entropy, prog_bar=True, logger=True)
+            self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
 
         if self.model_hparams.log_topsim_on_validation:
             topsim = compute_topsim(meanings, messages)
-            self.log("topsim", topsim, prog_bar=True, logger=True)
+            self.log("topsim", topsim, prog_bar=True)
             print("Topsim: ", topsim)
 
     def on_fit_start(self):
