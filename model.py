@@ -302,7 +302,8 @@ class Receiver(nn.Module):
             self, vocab_size, embed_dim, hidden_size, max_len, n_features, n_values, layer_norm, num_layers
     ):
         super(Receiver, self).__init__()
-        self.embedding = nn.Embedding(vocab_size+1, embed_dim)
+        self.embedding_perc = nn.Embedding(vocab_size+1, embed_dim)
+        self.embedding_prod = nn.Embedding(vocab_size+1, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -339,7 +340,7 @@ class Receiver(nn.Module):
     def forward_first_turn(self, messages, message_lengths):
         # Encode message
         batch_size = messages.shape[0]
-        embedded_message = self.embedding(messages)
+        embedded_message = self.embedding_perc(messages)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
         prev_c = [
@@ -390,7 +391,7 @@ class Receiver(nn.Module):
                 x = step_logits.argmax(dim=1)
             logits.append(distr.log_prob(x))
 
-            input = self.embedding(x)
+            input = self.embedding_prod(x)
             sequence.append(x)
 
         sequence = torch.stack(sequence).permute(1, 0)
@@ -410,7 +411,7 @@ class Receiver(nn.Module):
 
         encoded_messages = []
         for messages, message_lengths in zip([messages_1, messages_2],[message_lengths_1, message_lengths_2]):
-            embedded_message = self.embedding(messages)
+            embedded_message = self.embedding_perc(messages)
 
             prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
             prev_c = [
@@ -483,7 +484,9 @@ class Sender(pl.LightningModule):
         self.embed_input_lstm = nn.Linear(hidden_size, embed_dim)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.embedding_perc = nn.Embedding(vocab_size, embed_dim)
+        self.embedding_prod = nn.Embedding(vocab_size, embed_dim)
+
 
         self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
 
@@ -542,7 +545,7 @@ class Sender(pl.LightningModule):
                 input_objects = step_logits.argmax(dim=1)
             logits.append(distr.log_prob(input_objects))
 
-            input = self.embedding(input_objects)
+            input = self.embedding_prod(input_objects)
             sequence.append(input_objects)
 
         sequence = torch.stack(sequence).permute(1, 0)
@@ -561,7 +564,7 @@ class Sender(pl.LightningModule):
         # Encode message
         batch_size = messages.shape[0]
         # TODO: same embedding for prod/perc?
-        embedded_message = self.embedding(messages)
+        embedded_message = self.embedding_perc(messages)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in
                     range(self.num_layers)]
@@ -611,7 +614,7 @@ class Sender(pl.LightningModule):
                 messages = step_logits.argmax(dim=1)
             logits.append(distr.log_prob(messages))
 
-            input = self.embedding(messages)
+            input = self.embedding_prod(messages)
             sequence.append(messages)
 
         sequence = torch.stack(sequence).permute(1, 0)
