@@ -1081,7 +1081,7 @@ class SignalingGameModule(pl.LightningModule):
             effective_log_prob_s_1 += log_prob_s[:, i] * not_eosed
         effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_1_lengths.float()
 
-        weighted_entropy = effective_entropy_s_1.mean() * self.sender_entropy_coeff
+        entropy_loss = effective_entropy_s_1.mean() * self.sender_entropy_coeff
         log_prob = effective_log_prob_s_1
         message_lengths = messages_sender_1_lengths
 
@@ -1102,14 +1102,13 @@ class SignalingGameModule(pl.LightningModule):
                 effective_log_prob_r += log_prob_r[:, i] * not_eosed
             effective_entropy_r = effective_entropy_r / messages_receiver_1_lengths.float()
 
-            weighted_entropy = (effective_entropy_s_1.mean() * self.sender_entropy_coeff
+            entropy_loss = (effective_entropy_s_1.mean() * self.sender_entropy_coeff
                                 + effective_entropy_s_2.mean() * self.sender_entropy_coeff
                                 + effective_entropy_r.mean() * self.receiver_entropy_coeff)
             log_prob = effective_log_prob_s_1 + effective_log_prob_s_2 + effective_log_prob_r
             message_lengths = messages_sender_1_lengths + messages_receiver_1_lengths + messages_sender_2_lengths
 
-        # self.log(f"effective_log_prob_s", effective_log_prob_s_1.mean(), add_dataloader_idx=False)
-        self.log(f"weighted_entropy", weighted_entropy.mean())
+        self.log(f"entropy_loss", entropy_loss.mean())
 
         length_loss = message_lengths.float() * self.length_cost
 
@@ -1125,7 +1124,7 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"policy_loss", policy_loss.mean())
         self.log(f"policy_length_loss", policy_length_loss.mean())
 
-        optimized_loss = policy_length_loss + policy_loss - weighted_entropy
+        optimized_loss = policy_length_loss + policy_loss - entropy_loss
 
         # add the differentiable loss
         optimized_loss += loss.mean()
