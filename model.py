@@ -1009,7 +1009,7 @@ class SignalingGameModule(pl.LightningModule):
 
         messages_sender_1, log_prob_s, entropy_s = sender.forward_first_turn(sender_input)
         messages_sender_1_lengths = find_lengths(messages_sender_1)
-        self.log(f"message_lengths", messages_sender_1_lengths.type(torch.float).mean() - 1)
+        self.log(f"message_lengths", messages_sender_1_lengths.float().mean() - 1)
 
         if not disable_noise:
             messages_sender_1 = self.add_noise(messages_sender_1)
@@ -1021,7 +1021,7 @@ class SignalingGameModule(pl.LightningModule):
 
         if self.model_hparams.multi_turn:
             messages_receiver_1_lengths = find_lengths(messages_receiver_1)
-            self.log(f"message_lengths_receiver", messages_receiver_1_lengths.type(torch.float).mean() - 1)
+            self.log(f"message_lengths_receiver", messages_receiver_1_lengths.float().mean() - 1)
 
             messages_sender_2, log_prob_s_2, entropy_s_2, out_noise_loc = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
             if self.model_hparams.sender_aux_loss and not disable_noise:
@@ -1031,7 +1031,7 @@ class SignalingGameModule(pl.LightningModule):
                 loss += sender_aux_loss
 
             messages_sender_2_lengths = find_lengths(messages_sender_2)
-            self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.type(torch.float).mean() - 1)
+            self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.float().mean() - 1)
 
             if not disable_noise:
                 messages_sender_2 = self.add_noise(messages_sender_2)
@@ -1177,11 +1177,8 @@ class SignalingGameModule(pl.LightningModule):
 
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
-            sender = self.senders[sender_idx]
-
             _, acc_no_noise, messages = self.forward(sender_input, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
 
-            messages, _, _ = sender.forward_first_turn(sender_input)
             return sender_input, messages, acc_no_noise
 
     def validation_epoch_end(self, validation_step_outputs):
