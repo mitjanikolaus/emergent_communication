@@ -310,7 +310,15 @@ class Receiver(nn.Module):
         self.max_len = max_len
 
         lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
-        self.cells = nn.ModuleList(
+        self.cells_perception = nn.ModuleList(
+            [
+                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+                if i == 0
+                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                for i in range(num_layers)
+            ]
+        )
+        self.cells_perception_2 = nn.ModuleList(
             [
                 lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
@@ -351,7 +359,7 @@ class Receiver(nn.Module):
         hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
         for step in range(max_message_len):
             lstm_input = embedded_message[:, step]
-            for i, layer in enumerate(self.cells):
+            for i, layer in enumerate(self.cells_perception):
                 h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
@@ -410,7 +418,7 @@ class Receiver(nn.Module):
         batch_size = messages_1.shape[0]
 
         encoded_messages = []
-        for messages, message_lengths in zip([messages_1, messages_2],[message_lengths_1, message_lengths_2]):
+        for messages, message_lengths, cells in zip([messages_1, messages_2],[message_lengths_1, message_lengths_2], [self.cells_perception, self.cells_perception_2]):
             embedded_message = self.embedding_perc(messages)
 
             prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
@@ -422,7 +430,7 @@ class Receiver(nn.Module):
             hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
             for step in range(max_message_len):
                 lstm_input = embedded_message[:, step]
-                for i, layer in enumerate(self.cells):
+                for i, layer in enumerate(cells):
                     h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
                     prev_c[i] = c_t
                     prev_hidden[i] = h_t
