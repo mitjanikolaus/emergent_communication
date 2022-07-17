@@ -1112,10 +1112,11 @@ class SignalingGameModule(pl.LightningModule):
 
         length_loss = message_lengths.float() * self.length_cost
 
-        policy_length_loss = (
-            (length_loss - self.baselines["length"].predict(length_loss))
-            * log_prob
-        ).mean()
+        # policy_length_loss = (
+        #     (length_loss - self.baselines["length"].predict(length_loss))
+        #     * log_prob
+        # ).mean()
+        policy_length_loss = (length_loss * log_prob).mean()
         loss_baseline = self.baselines["loss"].predict(loss.detach())
         policy_loss = (
             (loss.detach() - loss_baseline) * log_prob
