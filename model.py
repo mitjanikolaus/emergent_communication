@@ -1083,7 +1083,8 @@ class SignalingGameModule(pl.LightningModule):
 
         entropy_loss = effective_entropy_s_1.mean() * self.sender_entropy_coeff
         log_prob = effective_log_prob_s_1
-        message_lengths = messages_sender_1_lengths
+
+        policy_length_loss = messages_sender_1_lengths.float() * self.length_cost * effective_log_prob_s_1
 
         if self.model_hparams.multi_turn:
             effective_entropy_s_2 = torch.zeros(batch_size).type_as(sender_input)
@@ -1106,17 +1107,14 @@ class SignalingGameModule(pl.LightningModule):
                                 + effective_entropy_s_2.mean() * self.sender_entropy_coeff
                                 + effective_entropy_r.mean() * self.receiver_entropy_coeff)
             log_prob = effective_log_prob_s_1 + effective_log_prob_s_2 + effective_log_prob_r
-            message_lengths = messages_sender_1_lengths + messages_receiver_1_lengths + messages_sender_2_lengths
+            policy_length_loss += messages_receiver_1_lengths.float() * self.length_cost * effective_log_prob_r
+
+            policy_length_loss += messages_sender_2_lengths.float() * self.length_cost * effective_log_prob_s_2
 
         self.log(f"entropy_loss", entropy_loss.mean())
 
-        length_loss = message_lengths.float() * self.length_cost
+        policy_length_loss = policy_length_loss.mean()
 
-        # policy_length_loss = (
-        #     (length_loss - self.baselines["length"].predict(length_loss))
-        #     * log_prob
-        # ).mean()
-        policy_length_loss = (length_loss * log_prob).mean()
         loss_baseline = self.baselines["loss"].predict(loss.detach())
         policy_loss = (
             (loss.detach() - loss_baseline) * log_prob
@@ -1132,7 +1130,6 @@ class SignalingGameModule(pl.LightningModule):
 
         if self.training:
             self.baselines["loss"].update(loss)
-            self.baselines["length"].update(length_loss)
 
         if return_messages:
             return optimized_loss, acc, messages_sender_1
