@@ -28,9 +28,9 @@ class MeanBaseline():
             loss.detach().mean().item() - self.mean_baseline
         ) / self.n_points
 
-    def predict(self, loss: torch.Tensor) -> torch.Tensor:
-        if self.mean_baseline.device != loss.device:
-            self.mean_baseline = self.mean_baseline.to(loss.device)
+    def predict(self, device) -> torch.Tensor:
+        if self.mean_baseline.device != device:
+            self.mean_baseline = self.mean_baseline.to(device)
         return self.mean_baseline
 
 

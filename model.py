@@ -1092,7 +1092,8 @@ class SignalingGameModule(pl.LightningModule):
         entropy_loss = effective_entropy_s_1.mean() * self.sender_entropy_coeff
         log_prob = effective_log_prob_s_1
 
-        policy_length_loss = messages_sender_1_lengths.float() * self.length_cost * effective_log_prob_s_1
+        baseline = self.baselines["length_sender_1"].predict(messages_sender_1_lengths.device)
+        policy_length_loss = (messages_sender_1_lengths.float() - baseline) * self.length_cost * effective_log_prob_s_1
 
         if self.model_hparams.multi_turn:
             effective_entropy_s_2 = torch.zeros(batch_size).type_as(sender_input)
@@ -1115,15 +1116,18 @@ class SignalingGameModule(pl.LightningModule):
                                 + effective_entropy_s_2.mean() * self.sender_entropy_coeff
                                 + effective_entropy_r.mean() * self.receiver_entropy_coeff)
             log_prob = effective_log_prob_s_1 + effective_log_prob_s_2 + effective_log_prob_r
-            policy_length_loss += messages_receiver_1_lengths.float() * self.length_cost * effective_log_prob_r
 
-            policy_length_loss += messages_sender_2_lengths.float() * self.length_cost * effective_log_prob_s_2
+            baseline = self.baselines["length_receiver_1"].predict(messages_receiver_1_lengths.device)
+            policy_length_loss += (messages_receiver_1_lengths.float() - baseline) * self.length_cost * effective_log_prob_r
+
+            baseline = self.baselines["length_sender_2"].predict(messages_sender_2_lengths.device)
+            policy_length_loss += (messages_sender_2_lengths.float() - baseline) * self.length_cost * effective_log_prob_s_2
 
         self.log(f"entropy_loss", entropy_loss.mean())
 
         policy_length_loss = policy_length_loss.mean()
 
-        loss_baseline = self.baselines["loss"].predict(loss.detach())
+        loss_baseline = self.baselines["loss"].predict(loss.device)
         policy_loss = (
             (loss.detach() - loss_baseline) * log_prob
         ).mean()
@@ -1138,6 +1142,10 @@ class SignalingGameModule(pl.LightningModule):
 
         if self.training:
             self.baselines["loss"].update(loss)
+            self.baselines["length_sender_1"].update(messages_sender_1_lengths.float())
+            if self.model_hparams.multi_turn:
+                self.baselines["length_receiver_1"].update(messages_receiver_1_lengths.float())
+                self.baselines["length_sender_2"].update(messages_sender_2_lengths.float())
 
         if return_messages:
             return optimized_loss, acc, messages_sender_1
