@@ -606,6 +606,7 @@ class Sender(pl.LightningModule):
         sequence = []
         logits = []
         entropy = []
+        all_step_logits = []
 
         for step in range(self.max_len):
             for i, layer in enumerate(self.cells):
@@ -623,6 +624,7 @@ class Sender(pl.LightningModule):
             else:
                 messages = step_logits.argmax(dim=1)
             logits.append(distr.log_prob(messages))
+            all_step_logits.append(step_logits)
 
             input = self.embedding_prod(messages)
             sequence.append(messages)
@@ -630,6 +632,7 @@ class Sender(pl.LightningModule):
         sequence = torch.stack(sequence).permute(1, 0)
         logits = torch.stack(logits).permute(1, 0)
         entropy = torch.stack(entropy).permute(1, 0)
+        all_step_logits = torch.stack(all_step_logits).permute(1, 0, 2)
 
         zeros = torch.zeros((sequence.size(0), 1)).type_as(messages)
 
@@ -639,7 +642,7 @@ class Sender(pl.LightningModule):
 
         output_noise_location = self.linear_predict_noise_loc(encoded_message)
 
-        return sequence, logits, entropy, output_noise_location
+        return sequence, logits, entropy, output_noise_location, all_step_logits
 
 
 class OptimalSender(pl.LightningModule):
@@ -1015,12 +1018,12 @@ class SignalingGameModule(pl.LightningModule):
         sender = self.senders[sender_idx]
         receiver = self.receivers[receiver_idx]
         batch_size = sender_input.shape[0]
-        loss = torch.zeros(batch_size).to(sender_input.device)
 
         messages_sender_1, log_prob_s, entropy_s = sender.forward_first_turn(sender_input)
         messages_sender_1_lengths = find_lengths(messages_sender_1)
         self.log(f"message_lengths", messages_sender_1_lengths.float().mean() - 1)
 
+        original_messages_sender_1 = messages_sender_1.detach().clone()
         if not disable_noise:
             messages_sender_1 = self.add_noise(messages_sender_1)
 
@@ -1033,12 +1036,7 @@ class SignalingGameModule(pl.LightningModule):
             messages_receiver_1_lengths = find_lengths(messages_receiver_1)
             self.log(f"message_lengths_receiver", messages_receiver_1_lengths.float().mean() - 1)
 
-            messages_sender_2, log_prob_s_2, entropy_s_2, out_noise_loc = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
-            if self.model_hparams.sender_aux_loss and not disable_noise:
-                labels_noise_loc = torch.nonzero(messages_sender_1 == self.token_noise)[:, 1]
-                sender_aux_loss = F.cross_entropy(out_noise_loc, labels_noise_loc, reduction="none")
-                self.log(f"sender_aux_loss", sender_aux_loss.mean(), add_dataloader_idx=False)
-                loss += sender_aux_loss
+            messages_sender_2, log_prob_s_2, entropy_s_2, out_noise_loc, all_step_logits_s_2 = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
 
             messages_sender_2_lengths = find_lengths(messages_sender_2)
             self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.float().mean() - 1)
@@ -1070,22 +1068,10 @@ class SignalingGameModule(pl.LightningModule):
             receiver_output_2 = receiver_output_2.view(batch_size * self.num_features, self.num_values)
             receiver_loss_2 = F.cross_entropy(receiver_output_2, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
             receiver_loss = receiver_loss_2
-            if self.model_hparams.receiver_aux_loss:
-                receiver_loss += receiver_loss_1
-
-            if self.model_hparams.receiver_aux_loss_2:
-                if self.model_hparams.noise == "one_symbol":
-                    noise_locations = messages_sender_1.argmax(dim=1)
-                    # Encourage receiver to send noise location in first token
-                    receiver_noise_loss = F.nll_loss(all_step_logits_r[:, 0], noise_locations, reduction="none")
-                    receiver_loss += receiver_noise_loss
-                else:
-                    raise NotImplementedError()
 
         self.log(f"receiver_loss", receiver_loss.mean())
 
         assert len(receiver_loss) == batch_size
-        loss += receiver_loss
 
         # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
         effective_entropy_s_1 = torch.zeros(batch_size).type_as(sender_input)
@@ -1136,23 +1122,56 @@ class SignalingGameModule(pl.LightningModule):
 
         self.log(f"entropy_loss", entropy_loss.mean())
 
-        policy_length_loss = policy_length_loss.mean()
-
-        loss_baseline = self.baselines["loss"].predict(loss.device)
+        loss_baseline = self.baselines["loss"].predict(receiver_loss.device)
         policy_loss = (
-            (loss.detach() - loss_baseline) * log_prob
+            (receiver_loss.detach() - loss_baseline) * log_prob
         ).mean()
+
+        policy_length_loss = policy_length_loss.mean()
 
         self.log(f"policy_loss", policy_loss.mean())
         self.log(f"policy_length_loss", policy_length_loss.mean())
 
         optimized_loss = policy_length_loss + policy_loss - entropy_loss
 
-        # add the differentiable loss
-        optimized_loss += loss.mean()
+        # add the differentiable loss terms
+        optimized_loss += receiver_loss.mean()
+
+        if self.model_hparams.multi_turn:
+            if self.model_hparams.receiver_aux_loss:
+                self.log(f"receiver_aux_loss", receiver_loss_1.mean())
+                optimized_loss += receiver_loss_1.mean()
+
+            if self.model_hparams.receiver_aux_loss_2 and not disable_noise:
+                if self.model_hparams.noise == "one_symbol":
+                    noise_locations = messages_sender_1.argmax(dim=1)
+                    # Encourage receiver to send noise location in first token
+                    receiver_noise_loss = F.nll_loss(all_step_logits_r[:, 0], noise_locations, reduction="none")
+                    self.log(f"receiver_aux_loss_2", receiver_noise_loss.mean())
+
+                    optimized_loss += receiver_noise_loss.mean()
+                else:
+                    raise NotImplementedError()
+
+            if self.model_hparams.sender_aux_loss and not disable_noise:
+                labels_noise_loc = torch.nonzero(messages_sender_1 == self.token_noise)[:, 1]
+                sender_aux_loss = F.cross_entropy(out_noise_loc, labels_noise_loc, reduction="none")
+                self.log(f"sender_aux_loss", sender_aux_loss.mean())
+                optimized_loss += sender_aux_loss.mean()
+
+            if self.model_hparams.sender_aux_loss_2:
+                if self.model_hparams.noise == "one_symbol":
+                    noise_locations = messages_sender_1.argmax(dim=1)
+                    content_noise_locations = original_messages_sender_1[range(batch_size), noise_locations]
+                    # Encourage sender to send content from noise location again
+                    sender_noise_loss = F.nll_loss(all_step_logits_s_2[:, 0], content_noise_locations, reduction="none")
+                    self.log(f"sender_aux_loss_2", sender_noise_loss.mean())
+                    optimized_loss += sender_noise_loss.mean()
+                else:
+                    raise NotImplementedError()
 
         if self.training:
-            self.baselines["loss"].update(loss)
+            self.baselines["loss"].update(receiver_loss)
             self.baselines["length_sender_1"].update(messages_sender_1_lengths.float())
             if self.model_hparams.multi_turn:
                 self.baselines["length_receiver_1"].update(messages_receiver_1_lengths.float())
