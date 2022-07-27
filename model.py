@@ -496,6 +496,7 @@ class Sender(pl.LightningModule):
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding_perc = nn.Embedding(vocab_size, embed_dim)
         self.embedding_prod = nn.Embedding(vocab_size, embed_dim)
+        self.embedding_prod_turn_2 = nn.Embedding(vocab_size, embed_dim*2)
 
 
         self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
@@ -516,9 +517,19 @@ class Sender(pl.LightningModule):
             ]
         )
 
-        self.cells = nn.ModuleList(
+        #TODO: separate LSTMs for production turn 1/ turn 2?
+        self.cells_production = nn.ModuleList(
             [
                 lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+                if i == 0
+                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                for i in range(self.num_layers)
+            ]
+        )
+
+        self.cells_production_turn_2 = nn.ModuleList(
+            [
+                lstm_cell(input_size=embed_dim*2, hidden_size=hidden_size)
                 if i == 0
                 else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
@@ -539,7 +550,7 @@ class Sender(pl.LightningModule):
         entropy = []
 
         for step in range(self.max_len):
-            for i, layer in enumerate(self.cells):
+            for i, layer in enumerate(self.cells_production):
                 h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
@@ -570,7 +581,10 @@ class Sender(pl.LightningModule):
 
         return sequence, logits, entropy
 
-    def forward_second_turn(self, messages, message_lengths):
+    def forward_second_turn(self, input_objects, messages, message_lengths):
+
+        input_obj = self.embed_input(input_objects)
+
         # Encode message
         batch_size = messages.shape[0]
         # TODO: same embedding for prod/perc?
@@ -596,7 +610,9 @@ class Sender(pl.LightningModule):
 
         encoded_message = hidden_states[range(batch_size), message_lengths-1]
 
-        input = self.embed_input_lstm(encoded_message)
+        input_msg = self.embed_input_lstm(encoded_message)
+
+        input = torch.cat((input_obj, input_msg), dim=1)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input) for _ in range(self.num_layers)]
         prev_c = [
@@ -609,7 +625,7 @@ class Sender(pl.LightningModule):
         all_step_logits = []
 
         for step in range(self.max_len):
-            for i, layer in enumerate(self.cells):
+            for i, layer in enumerate(self.cells_production_turn_2):
                 h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
@@ -626,7 +642,7 @@ class Sender(pl.LightningModule):
             logits.append(distr.log_prob(messages))
             all_step_logits.append(step_logits)
 
-            input = self.embedding_prod(messages)
+            input = self.embedding_prod_turn_2(messages)
             sequence.append(messages)
 
         sequence = torch.stack(sequence).permute(1, 0)
@@ -1036,7 +1052,7 @@ class SignalingGameModule(pl.LightningModule):
             messages_receiver_1_lengths = find_lengths(messages_receiver_1)
             self.log(f"message_lengths_receiver", messages_receiver_1_lengths.float().mean() - 1)
 
-            messages_sender_2, log_prob_s_2, entropy_s_2, out_noise_loc, all_step_logits_s_2 = sender.forward_second_turn(messages_receiver_1, messages_receiver_1_lengths)
+            messages_sender_2, log_prob_s_2, entropy_s_2, out_noise_loc, all_step_logits_s_2 = sender.forward_second_turn(sender_input, messages_receiver_1, messages_receiver_1_lengths)
 
             messages_sender_2_lengths = find_lengths(messages_sender_2)
             self.log(f"message_lengths_sender_second_turn", messages_sender_2_lengths.float().mean() - 1)
