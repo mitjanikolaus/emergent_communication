@@ -23,9 +23,14 @@ def run(args):
                                          batch_size=config["data"]["batch_size"],
                                          num_workers=config["data"]["num_workers"])
 
-    model = SignalingGameModule(**config)
+    checkpoint = config["model"]["load_checkpoint"]
+    if checkpoint:
+        print("Loading checkpoint: "+checkpoint)
+        model = SignalingGameModule.load_from_checkpoint(checkpoint, **config)
+    else:
+        model = SignalingGameModule(**config)
 
-    checkpoint_callback = ModelCheckpoint(monitor="test_acc", mode="max")
+    checkpoint_callback = ModelCheckpoint(monitor="test_acc", mode="max", save_last=True)
 
     trainer = pl.Trainer.from_argparse_args(Namespace(**config["trainer"]), callbacks=[checkpoint_callback])
 
