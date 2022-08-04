@@ -1173,6 +1173,13 @@ class SignalingGameModule(pl.LightningModule):
                 else:
                     raise NotImplementedError()
 
+            if self.model_hparams.receiver_aux_loss_3 and not disable_noise:
+                predicted_noise_locations = receiver_out_2_entropy.mean(dim=1) > receiver_out_2_entropy.mean()
+                # Loss: push length to be greater 0 only if noise is present
+                receiver_aux_loss_3 = (predicted_noise_locations != (messages_receiver_1_lengths.float() - 1 > 0)).float() * effective_log_prob_r
+                self.log(f"receiver_aux_loss_3", receiver_aux_loss_3.mean())
+                optimized_loss += receiver_aux_loss_3.mean()
+
             if self.model_hparams.sender_aux_loss and not disable_noise:
                 labels_noise_loc = torch.nonzero(messages_sender_1 == self.token_noise)[:, 1]
                 sender_aux_loss = F.cross_entropy(out_noise_loc, labels_noise_loc, reduction="none")
