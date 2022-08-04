@@ -1047,6 +1047,8 @@ class SignalingGameModule(pl.LightningModule):
             messages_sender_1, messages_sender_1_lengths
         )
         receiver_output_1 = receiver_output_1.view(batch_size, self.num_features, self.num_values)
+        receiver_out_1_entropy = Categorical(logits=receiver_output_1).entropy()
+        self.log(f"receiver_out_1_entropy", receiver_out_1_entropy.float().mean())
 
         if self.model_hparams.multi_turn:
             messages_receiver_1_lengths = find_lengths(messages_receiver_1)
@@ -1062,8 +1064,8 @@ class SignalingGameModule(pl.LightningModule):
 
             receiver_output_2 = receiver.forward_second_turn(messages_sender_1, messages_sender_2, messages_sender_1_lengths, messages_sender_2_lengths)
             receiver_output_2 = receiver_output_2.view(batch_size, self.num_features, self.num_values)
-            receiver_out_entropy = Categorical(logits=receiver_output_2).entropy()
-            self.log(f"receiver_out_entropy", receiver_out_entropy.float().mean())
+            receiver_out_2_entropy = Categorical(logits=receiver_output_2).entropy()
+            self.log(f"receiver_out_2_entropy", receiver_out_2_entropy.float().mean())
 
         # TODO verify
         sender_input = sender_input.view(batch_size, self.num_features, self.num_values)
