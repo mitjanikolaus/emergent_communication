@@ -1107,7 +1107,7 @@ class SignalingGameModule(pl.LightningModule):
         effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_1_lengths.float()
 
         entropy_loss = effective_entropy_s_1.mean() * self.sender_entropy_coeff
-        log_prob = effective_log_prob_s_1
+        log_prob_s = effective_log_prob_s_1
 
         baseline = self.baselines["length_sender_1"].predict(messages_sender_1_lengths.device)
         policy_length_loss = (messages_sender_1_lengths.float() - baseline) * self.length_cost * effective_log_prob_s_1
@@ -1132,7 +1132,7 @@ class SignalingGameModule(pl.LightningModule):
             entropy_loss = (effective_entropy_s_1.mean() * self.sender_entropy_coeff
                                 + effective_entropy_s_2.mean() * self.sender_entropy_coeff
                                 + effective_entropy_r.mean() * self.receiver_entropy_coeff)
-            log_prob = effective_log_prob_s_1 + effective_log_prob_s_2 + effective_log_prob_r
+            log_prob_s = effective_log_prob_s_1 + effective_log_prob_s_2
 
             baseline = self.baselines["length_receiver_1"].predict(messages_receiver_1_lengths.device)
             policy_length_loss += (messages_receiver_1_lengths.float() - baseline) * self.length_cost * effective_log_prob_r
@@ -1144,7 +1144,7 @@ class SignalingGameModule(pl.LightningModule):
 
         loss_baseline = self.baselines["loss"].predict(receiver_loss.device)
         policy_loss = (
-            (receiver_loss.detach() - loss_baseline) * log_prob
+            (receiver_loss.detach() - loss_baseline) * log_prob_s
         ).mean()
 
         policy_length_loss = policy_length_loss.mean()
@@ -1176,8 +1176,10 @@ class SignalingGameModule(pl.LightningModule):
             if self.model_hparams.receiver_aux_loss_3 and not disable_noise:
                 predicted_noise_locations = receiver_out_2_entropy.mean(dim=1) > receiver_out_2_entropy.mean()
                 # Loss: push length to be greater 0 only if noise is present
-                receiver_aux_loss_3 = (predicted_noise_locations != (messages_receiver_1_lengths.float() - 1 > 0)).float() * effective_log_prob_r
+                receiver_aux_loss_3 = (predicted_noise_locations != (messages_receiver_1_lengths.float() - 1 > 0)).float()
                 self.log(f"receiver_aux_loss_3", receiver_aux_loss_3.mean())
+                receiver_aux_loss_3 *= effective_log_prob_r
+
                 optimized_loss += receiver_aux_loss_3.mean()
 
             if self.model_hparams.sender_aux_loss and not disable_noise:
