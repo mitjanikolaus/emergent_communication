@@ -9,7 +9,7 @@ from torch import nn, jit
 import torch.nn.functional as F
 from torch.distributions import Categorical
 import pytorch_lightning as pl
-from torch.nn import ModuleList, Parameter
+from torch.nn import ModuleList, Parameter, GRUCell
 
 import pandas as pd
 
@@ -309,7 +309,7 @@ class Receiver(nn.Module):
         self.num_layers = num_layers
         self.max_len = max_len
 
-        lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
+        lstm_cell = GRUCell
         self.cells_perception = nn.ModuleList(
             [
                 lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
@@ -360,8 +360,8 @@ class Receiver(nn.Module):
         for step in range(max_message_len):
             lstm_input = embedded_message[:, step]
             for i, layer in enumerate(self.cells_perception):
-                h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(lstm_input, prev_hidden[i])
+                # prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 lstm_input = h_t
 
@@ -385,8 +385,8 @@ class Receiver(nn.Module):
 
         for step in range(self.max_len):
             for i, layer in enumerate(self.cells_production):
-                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(input, prev_hidden[i])
+                # prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 input = h_t
 
@@ -433,8 +433,8 @@ class Receiver(nn.Module):
             for step in range(max_message_len):
                 lstm_input = embedded_message[:, step]
                 for i, layer in enumerate(cells):
-                    h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
-                    prev_c[i] = c_t
+                    h_t = layer(lstm_input, prev_hidden[i])
+                    # prev_c[i] = c_t
                     prev_hidden[i] = h_t
                     lstm_input = h_t
 
@@ -506,13 +506,13 @@ class Sender(pl.LightningModule):
         self.vocab_size = vocab_size
         self.num_layers = num_layers
 
-        lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
+        cell = GRUCell
 
         self.cells_perception = nn.ModuleList(
             [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+                cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                else cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
@@ -520,18 +520,18 @@ class Sender(pl.LightningModule):
         #TODO: separate LSTMs for production turn 1/ turn 2?
         self.cells_production = nn.ModuleList(
             [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+                cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                else cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
 
         self.cells_production_turn_2 = nn.ModuleList(
             [
-                lstm_cell(input_size=embed_dim*2, hidden_size=hidden_size)
+                cell(input_size=embed_dim*2, hidden_size=hidden_size)
                 if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                else cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
@@ -551,8 +551,8 @@ class Sender(pl.LightningModule):
 
         for step in range(self.max_len):
             for i, layer in enumerate(self.cells_production):
-                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(input, prev_hidden[i])
+                # prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 input = h_t
 
@@ -601,8 +601,8 @@ class Sender(pl.LightningModule):
         for step in range(max_message_len):
             lstm_input = embedded_message[:, step]
             for i, layer in enumerate(self.cells_perception):
-                h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(lstm_input, prev_hidden[i])
+                # prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 lstm_input = h_t
 
@@ -626,8 +626,8 @@ class Sender(pl.LightningModule):
 
         for step in range(self.max_len):
             for i, layer in enumerate(self.cells_production_turn_2):
-                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(input, prev_hidden[i])
+                # prev_c[i] = c_t
                 prev_hidden[i] = h_t
                 input = h_t
 
@@ -749,7 +749,7 @@ class SenderReceiver(pl.LightningModule):
         if sender_layer_norm != receiver_layer_norm:
             raise ValueError("Joint Sender and Receiver requires both sender_layer_norm and receiver_layer_norm to be "
                              "set to true or false at the same time")
-        lstm_cell = LayerNormLSTMCell if sender_layer_norm else nn.LSTMCell
+        lstm_cell = GRUCell
         self.cells = nn.ModuleList(
             [
                 lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
