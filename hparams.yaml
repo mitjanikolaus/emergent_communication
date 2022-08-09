@@ -5,30 +5,31 @@ model:
   alt_agents: false
   load_checkpoint: null
   baseline_type: mean
-  length_cost: 0.01
-  max_len: 5
-  num_features: 4
-  num_values: 4
+  length_cost: 0
+  max_len: 3
+  num_features: 2
+  num_values: 100
   num_senders: 1
   num_receivers: 1
-  receiver_embed_dim: 128
+  receiver_embed_dim: 30
   receiver_num_layers: 1
-  receiver_hidden_dim: 512
+  receiver_hidden_dim: 500
   receiver_learning_speed: 1
   receiver_aux_loss: false
   receiver_aux_loss_2: false
+  receiver_aux_loss_3: false
   sender_aux_loss: false
   sender_aux_loss_2: false
-  sender_embed_dim: 128
-  sender_entropy_coeff: 0.3
-  receiver_entropy_coeff: 0.3
+  sender_embed_dim: 5
+  sender_entropy_coeff: 0.5
+  receiver_entropy_coeff: 0.5
   sender_num_layers: 1
   receiver_layer_norm: true
   sender_layer_norm: true
-  sender_hidden_dim: 512
+  sender_hidden_dim: 500
   sender_learning_speed: 1
-  vocab_size: 5
-  noise: one_symbol
+  vocab_size: 100
+  noise: 0
   multi_turn: false
   log_topsim_on_validation: true
   log_entropy_on_validation: false
@@ -41,6 +42,6 @@ trainer:
   gpus: 0
 data:
   max_num_objects: 100000
-  batch_size: 128
+  batch_size: 5120
   test_set_size: 0.1
   num_workers: 0

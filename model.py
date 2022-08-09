@@ -302,6 +302,8 @@ class Receiver(nn.Module):
             self, vocab_size, embed_dim, hidden_size, max_len, n_features, n_values, layer_norm, num_layers
     ):
         super(Receiver, self).__init__()
+        self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
+
         self.embedding_perc = nn.Embedding(vocab_size+1, embed_dim)
         self.embedding_prod = nn.Embedding(vocab_size+1, embed_dim)
 
@@ -339,7 +341,7 @@ class Receiver(nn.Module):
 
         self.linear_out = nn.Linear(hidden_size, n_features*n_values)
 
-        self.embed_input = nn.Linear(hidden_size, embed_dim)
+        self.embed_message = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
@@ -372,11 +374,14 @@ class Receiver(nn.Module):
         output = self.linear_out(encoded_message)
 
         # Create response:
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(encoded_message) for _ in range(self.num_layers)]
+        prev_hidden = [self.embed_message(encoded_message)]
+        prev_hidden.extend(
+            [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
+        )
         prev_c = [
             torch.zeros((batch_size, self.hidden_size)).type_as(encoded_message) for _ in range(self.num_layers)
         ]
-        input = self.embed_input(encoded_message)
+        input = torch.stack([self.sos_embedding] * batch_size)
 
         sequence = []
         logits = []
@@ -414,38 +419,35 @@ class Receiver(nn.Module):
         logits = torch.cat([logits, zeros], dim=1)
         entropy = torch.cat([entropy, zeros], dim=1)
 
-        return output, sequence, logits, entropy, all_step_logits
+        return output, sequence, logits, entropy, all_step_logits, encoded_message
 
-    def forward_second_turn(self, messages_1, messages_2, message_lengths_1, message_lengths_2):
-        batch_size = messages_1.shape[0]
+    def forward_second_turn(self, encoded_messages_1, messages_2, message_lengths_2):
+        batch_size = encoded_messages_1.shape[0]
 
-        encoded_messages = []
-        for messages, message_lengths, cells in zip([messages_1, messages_2],[message_lengths_1, message_lengths_2], [self.cells_perception, self.cells_perception_2]):
-            embedded_message = self.embedding_perc(messages)
+        embedded_message = self.embedding_perc(messages_2)
 
-            prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
-            prev_c = [
-                torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)
-            ]
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
+        prev_c = [
+            torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)
+        ]
 
-            max_message_len = embedded_message.shape[1]
-            hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
-            for step in range(max_message_len):
-                lstm_input = embedded_message[:, step]
-                for i, layer in enumerate(cells):
-                    h_t = layer(lstm_input, prev_hidden[i])
-                    # prev_c[i] = c_t
-                    prev_hidden[i] = h_t
-                    lstm_input = h_t
+        max_message_len = embedded_message.shape[1]
+        hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
+        for step in range(max_message_len):
+            lstm_input = embedded_message[:, step]
+            for i, layer in enumerate(self.cells_perception_2):
+                h_t = layer(lstm_input, prev_hidden[i])
+                # prev_c[i] = c_t
+                prev_hidden[i] = h_t
+                lstm_input = h_t
 
-                hidden_states[:, step] = h_t
+            hidden_states[:, step] = h_t
 
-            encoded_message = hidden_states[range(batch_size), message_lengths-1]
-            encoded_messages.append(encoded_message)
+        encoded_messages_2 = hidden_states[range(batch_size), message_lengths_2-1]
 
-        encoded_messages = torch.cat((encoded_messages[0], encoded_messages[1]), dim=-1)
+        encoded_messages = torch.cat((encoded_messages_1, encoded_messages_2), dim=-1)
         attn_weights = F.softmax(self.attn(encoded_messages).reshape(batch_size, self.hidden_size, 2), dim=-1)
-        encoded_messages = torch.sum(attn_weights * encoded_messages.reshape(batch_size, 512, -1), dim=-1)
+        encoded_messages = torch.sum(attn_weights * encoded_messages.reshape(batch_size, self.hidden_size, -1), dim=-1)
         output = self.linear_out(encoded_messages)
 
         return output
@@ -490,13 +492,19 @@ class Sender(pl.LightningModule):
         super(Sender, self).__init__()
         self.max_len = max_len
 
-        self.embed_input = nn.Linear(n_features*n_values, embed_dim)
-        self.embed_input_lstm = nn.Linear(hidden_size, embed_dim)
+        self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
+
+        self.embed_input = nn.Linear(n_features*n_values, hidden_size)
+
+        self.linear_in_perc = nn.Linear(n_features * n_values, hidden_size)
+        self.linear_in_prod = nn.Linear(hidden_size * 2, hidden_size)
+
+        self.embed_input_lstm = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding_perc = nn.Embedding(vocab_size, embed_dim)
         self.embedding_prod = nn.Embedding(vocab_size, embed_dim)
-        self.embedding_prod_turn_2 = nn.Embedding(vocab_size, embed_dim*2)
+        self.embedding_prod_turn_2 = nn.Embedding(vocab_size, embed_dim)
 
 
         self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
@@ -529,7 +537,7 @@ class Sender(pl.LightningModule):
 
         self.cells_production_turn_2 = nn.ModuleList(
             [
-                cell(input_size=embed_dim*2, hidden_size=hidden_size)
+                cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
                 else cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
@@ -539,11 +547,15 @@ class Sender(pl.LightningModule):
     def forward_first_turn(self, input_objects):
         batch_size = input_objects.shape[0]
 
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input_objects) for _ in range(self.num_layers)]
+        prev_hidden = [self.linear_in_perc(input_objects)]
+        prev_hidden.extend(
+            [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
+        )
         prev_c = [
             torch.zeros((batch_size, self.hidden_size)).type_as(input_objects) for _ in range(self.num_layers)
         ]
-        input = self.embed_input(input_objects)
+
+        input = torch.stack([self.sos_embedding] * batch_size)
 
         sequence = []
         logits = []
@@ -582,12 +594,8 @@ class Sender(pl.LightningModule):
         return sequence, logits, entropy
 
     def forward_second_turn(self, input_objects, messages, message_lengths):
-
-        input_obj = self.embed_input(input_objects)
-
         # Encode message
         batch_size = messages.shape[0]
-        # TODO: same embedding for prod/perc?
         embedded_message = self.embedding_perc(messages)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in
@@ -612,9 +620,18 @@ class Sender(pl.LightningModule):
 
         input_msg = self.embed_input_lstm(encoded_message)
 
-        input = torch.cat((input_obj, input_msg), dim=1)
+        input_obj = self.embed_input(input_objects)
 
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input) for _ in range(self.num_layers)]
+        prev_hidden = torch.cat((input_obj, input_msg), dim=1)
+
+        prev_hidden = [self.linear_in_prod(prev_hidden)]
+        prev_hidden.extend(
+            [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
+        )
+
+        input = torch.stack([self.sos_embedding] * batch_size)
+
+        # prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input) for _ in range(self.num_layers)]
         prev_c = [
             torch.zeros((batch_size, self.hidden_size)).type_as(input) for _ in range(self.num_layers)
         ]
@@ -1043,7 +1060,7 @@ class SignalingGameModule(pl.LightningModule):
         if not disable_noise:
             messages_sender_1 = self.add_noise(messages_sender_1)
 
-        receiver_output_1, messages_receiver_1, log_prob_r, entropy_r, all_step_logits_r = receiver.forward_first_turn(
+        receiver_output_1, messages_receiver_1, log_prob_r, entropy_r, all_step_logits_r, receiver_encoded_messages_1 = receiver.forward_first_turn(
             messages_sender_1, messages_sender_1_lengths
         )
         receiver_output_1 = receiver_output_1.view(batch_size, self.num_features, self.num_values)
@@ -1062,7 +1079,7 @@ class SignalingGameModule(pl.LightningModule):
             if not disable_noise:
                 messages_sender_2 = self.add_noise(messages_sender_2)
 
-            receiver_output_2 = receiver.forward_second_turn(messages_sender_1, messages_sender_2, messages_sender_1_lengths, messages_sender_2_lengths)
+            receiver_output_2 = receiver.forward_second_turn(receiver_encoded_messages_1, messages_sender_2, messages_sender_2_lengths)
             receiver_output_2 = receiver_output_2.view(batch_size, self.num_features, self.num_values)
             receiver_out_2_entropy = Categorical(logits=receiver_output_2).entropy()
             self.log(f"receiver_out_2_entropy", receiver_out_2_entropy.float().mean())
