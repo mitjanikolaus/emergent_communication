@@ -1084,7 +1084,6 @@ class SignalingGameModule(pl.LightningModule):
             receiver_out_2_entropy = Categorical(logits=receiver_output_2).entropy()
             self.log(f"receiver_out_2_entropy", receiver_out_2_entropy.float().mean())
 
-        # TODO verify
         sender_input = sender_input.view(batch_size, self.num_features, self.num_values)
         acc_first_turn = (torch.sum((receiver_output_1.argmax(dim=-1) == sender_input.argmax(dim=-1)
                           ).detach(), dim=1) == self.num_features).float()
