@@ -1280,6 +1280,7 @@ class SignalingGameModule(pl.LightningModule):
         self.log("test_acc", test_acc, prog_bar=True, add_dataloader_idx=False)
         self.log("test_acc_no_noise", test_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
         print("test_acc: ", test_acc)
+        print("test_acc_no_noise: ", test_acc_no_noise)
 
         # Language analysis (on train set data)
         language_analysis_results = validation_step_outputs[1]
