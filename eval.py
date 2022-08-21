@@ -1,6 +1,7 @@
 import argparse
 from argparse import Namespace
 
+import torch
 import yaml
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
@@ -30,6 +31,11 @@ def run(args):
                                          test_set_size=config["data"]["test_set_size"],
                                          batch_size=config["data"]["batch_size"],
                                          num_workers=config["data"]["num_workers"])
+
+    if torch.cuda.is_available():
+        config["trainer"]["gpus"] = 1
+    else:
+        config["trainer"]["gpus"] = 0
 
     trainer = pl.Trainer.from_argparse_args(Namespace(**config["trainer"]))
 
