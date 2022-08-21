@@ -32,6 +32,8 @@ model:
   noise: 0
   multi_turn: false
   log_topsim_on_validation: true
+  log_posdis_on_validation: true
+  log_bosdis_on_validation: true
   log_entropy_on_validation: false
 trainer:
   default_hp_metric: false

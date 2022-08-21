@@ -13,7 +13,7 @@ from torch.nn import ModuleList, Parameter
 
 import pandas as pd
 
-from language_analysis import compute_topsim, compute_entropy
+from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
@@ -1291,6 +1291,10 @@ class SignalingGameModule(pl.LightningModule):
         self.analyze_language(messages, meanings)
 
     def analyze_language(self, messages, meanings):
+        # Remove trailing 0s
+        assert torch.all(messages[:, -1] == 0), "Messages do not contain trailing 0"
+        messages = messages[:, :-1]
+
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
@@ -1311,6 +1315,17 @@ class SignalingGameModule(pl.LightningModule):
             topsim = compute_topsim(meanings, messages)
             self.log("topsim", topsim, prog_bar=True)
             print("Topsim: ", topsim)
+
+        if self.model_hparams.log_posdis_on_validation:
+            posdis = compute_posdis(self.num_features, self.num_values, meanings, messages)
+            self.log("posdis", posdis, prog_bar=True)
+            print("posdis: ", posdis)
+
+        if self.model_hparams.log_bosdis_on_validation:
+            bosdis = compute_bosdis(meanings, messages, self.model_hparams["vocab_size"])
+            self.log("bosdis", bosdis, prog_bar=True)
+            print("bodis: ", bosdis)
+
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning
