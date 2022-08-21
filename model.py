@@ -1307,7 +1307,7 @@ class SignalingGameModule(pl.LightningModule):
         messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
         if self.model_hparams.log_entropy_on_validation:
-            entropy = compute_entropy(messages)
+            entropy = compute_entropy(messages.numpy())
             self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
 

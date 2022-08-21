@@ -1,74 +1,34 @@
 import datetime
-from collections import defaultdict
+from collections import Counter
 
 import editdistance
 import torch
 from scipy.spatial import distance
 from scipy.stats import spearmanr
 import numpy as np
+from torch import Tensor
+from tqdm import tqdm
 
 
 def compute_entropy(messages):
-    freq_table = defaultdict(float)
+    if not isinstance(messages, list) and len(messages.shape) > 1:
+        _, occs = np.unique(messages, return_counts=True, axis=0)
+        occs = occs.astype(np.float)
+        freqs = occs / len(messages)
+    else:
+        occs = Counter(messages).values()
+        freqs = [occ / len(messages) for occ in occs]
 
-    for m in messages:
-        m = tuple(m.tolist())
-        freq_table[m] += 1.0
-
-    t = torch.tensor([v for v in freq_table.values()]).float()
-    if (t < 0.0).any():
-        raise RuntimeError("Encountered negative probabilities")
-
-    t /= t.sum()
-    return (torch.where(t > 0, t.log(), t) * t).sum().item() / np.log(2)
-
-
-def _hashable_tensor(t):
-    if isinstance(t, tuple):
-        return t
-    if isinstance(t, int):
-        return t
-
-    try:
-        t = t.item()
-    except:
-        t = tuple(t.view(-1).tolist())
-    return t
-
-
-def entropy(messages):
-    from collections import defaultdict
-
-    freq_table = defaultdict(float)
-
-    for m in messages:
-        m = _hashable_tensor(m)
-        freq_table[m] += 1.0
-
-    return entropy_dict(freq_table)
-
-
-def entropy_dict(freq_table):
-    H = 0
-    n = sum(v for v in freq_table.values())
-
-    for m, freq in freq_table.items():
-        p = freq_table[m] / n
-        H += -p * np.log(p)
-    return H / np.log(2)
+    return sum([-freq * np.log(freq) for freq in freqs]) / np.log(2)
 
 
 def mutual_info(xs, ys):
-    e_x = entropy(xs)
-    e_y = entropy(ys)
+    e_x = compute_entropy(xs)
+    e_y = compute_entropy(ys)
 
-    xys = []
+    xys = [(x, y) for x, y in zip(xs, ys)]
 
-    for x, y in zip(xs, ys):
-        xy = (_hashable_tensor(x), _hashable_tensor(y))
-        xys.append(xy)
-
-    e_xy = entropy(xys)
+    e_xy = compute_entropy(xys)
 
     return e_x + e_y - e_xy
 
@@ -126,7 +86,7 @@ def compute_posdis(n_features, n_values, meanings, messages):
 
 
 def histogram(messages, vocab_size):
-    batch_size = messages.size(0)
+    batch_size = messages.shape[0]
 
     histogram = torch.zeros(batch_size, vocab_size, device=messages.device)
 
@@ -143,19 +103,18 @@ def compute_bosdis(meanings, messages, vocab_size):
 
 
 def information_gap_representation(meanings, representations):
-    gaps = torch.zeros(representations.size(1))
+    if isinstance(representations, Tensor):
+        representations = representations.numpy()
+    if isinstance(meanings, Tensor):
+        meanings = meanings.numpy()
+
+    gaps = torch.zeros(representations.shape[1])
     non_constant_positions = 0.0
 
-    for j in range(representations.size(1)):
-        symbol_mi = []
-        h_j = None
-        for i in range(meanings.size(1)):
-            x, y = meanings[:, i], representations[:, j]
-            info = mutual_info(x, y)
-            symbol_mi.append(info)
+    for j in tqdm(range(representations.shape[1])):
+        h_j = compute_entropy(representations[:, j])
 
-            if h_j is None:
-                h_j = entropy(y)
+        symbol_mi = [(mutual_info(meanings[:, i], representations[:, j])) for i in range(meanings.shape[1])]
 
         symbol_mi.sort(reverse=True)
 
