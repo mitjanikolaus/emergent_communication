@@ -320,14 +320,6 @@ class Receiver(nn.Module):
                 for i in range(num_layers)
             ]
         )
-        self.cells_perception_2 = nn.ModuleList(
-            [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
-                if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
-                for i in range(num_layers)
-            ]
-        )
         self.cells_production = nn.ModuleList(
             [
                 lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
@@ -435,7 +427,7 @@ class Receiver(nn.Module):
         hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
         for step in range(max_message_len):
             lstm_input = embedded_message[:, step]
-            for i, layer in enumerate(self.cells_perception_2):
+            for i, layer in enumerate(self.cells_perception):
                 h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
