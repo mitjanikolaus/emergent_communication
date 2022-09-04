@@ -337,7 +337,8 @@ class Receiver(nn.Module):
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
-        self.attn = nn.Linear(hidden_size*2, hidden_size*2)
+        self.attn_1 = nn.Linear(hidden_size, hidden_size)
+        self.attn_2 = nn.Linear(hidden_size, hidden_size)
 
     def forward_first_turn(self, messages, message_lengths):
         # Encode message
@@ -437,10 +438,15 @@ class Receiver(nn.Module):
 
         encoded_messages_2 = hidden_states[range(batch_size), message_lengths_2-1]
 
-        encoded_messages = torch.cat((encoded_messages_1, encoded_messages_2), dim=-1)
-        attn_weights = F.softmax(self.attn(encoded_messages).reshape(batch_size, self.hidden_size, 2), dim=-1)
-        encoded_messages = torch.sum(attn_weights * encoded_messages.reshape(batch_size, self.hidden_size, -1), dim=-1)
-        output = self.linear_out(encoded_messages)
+        attention_scores_1 = self.attn_1(encoded_messages_1)
+        attention_scores_2 = self.attn_2(encoded_messages_2)
+        attention_scores = torch.stack((attention_scores_1, attention_scores_2), dim=1)
+        attn_weights = F.softmax(attention_scores, dim=1)
+
+        encoded_messages = torch.stack((encoded_messages_1, encoded_messages_2), dim=1)
+        attn_out = torch.sum(attn_weights * encoded_messages, dim=1)
+
+        output = self.linear_out(attn_out)
 
         return output
 
