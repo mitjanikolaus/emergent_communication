@@ -320,14 +320,15 @@ class Receiver(nn.Module):
                 for i in range(num_layers)
             ]
         )
-        self.cells_production = nn.ModuleList(
-            [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
-                if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
-                for i in range(num_layers)
-            ]
-        )
+        self.cells_production = self.cells_perception
+        # self.cells_production = nn.ModuleList(
+        #     [
+        #         lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+        #         if i == 0
+        #         else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+        #         for i in range(num_layers)
+        #     ]
+        # )
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
