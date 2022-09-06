@@ -302,10 +302,17 @@ class Receiver(nn.Module):
             self, vocab_size, embed_dim, hidden_size, max_len, n_features, n_values, layer_norm, num_layers
     ):
         super(Receiver, self).__init__()
+
+        # Add one symbol for EOS treatment
+        vocab_size_production = vocab_size + 1
+
+        # Add two symbols for EOS and noise treatment
+        vocab_size_perception = vocab_size + 2
+
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
-        self.embedding_perc = nn.Embedding(vocab_size+1, embed_dim)
-        self.embedding_prod = nn.Embedding(vocab_size+1, embed_dim)
+        self.embedding_perc = nn.Embedding(vocab_size_perception, embed_dim)
+        self.embedding_prod = nn.Embedding(vocab_size_production, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -321,13 +328,11 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.fc1 = nn.Linear(n_features*n_values, hidden_size)
-
         self.linear_out = nn.Linear(hidden_size, n_features*n_values)
 
         self.embed_message = nn.Linear(hidden_size, hidden_size)
 
-        self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
+        self.hidden_to_output = nn.Linear(hidden_size, vocab_size_production)
 
         self.attn_1 = nn.Linear(hidden_size, hidden_size)
         self.attn_2 = nn.Linear(hidden_size, hidden_size)
@@ -448,7 +453,11 @@ class ReceiverMLP(nn.Module):
             self, vocab_size, embed_dim, n_features, n_values, max_message_len
     ):
         super(ReceiverMLP, self).__init__()
-        self.embedding = nn.Embedding(vocab_size+1, embed_dim)
+
+        # Add two symbols for EOS and noise treatment
+        vocab_size += 2
+
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.linear_message = nn.Linear(embed_dim * (max_message_len + 1), embed_dim)
 
         self.linear_out = nn.Linear(embed_dim, n_features*n_values)
@@ -480,6 +489,10 @@ class Sender(pl.LightningModule):
         num_layers,
     ):
         super(Sender, self).__init__()
+
+        # Add one symbol for EOS treatment
+        vocab_size += 1
+
         self.max_len = max_len
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
@@ -656,6 +669,10 @@ class OptimalSender(pl.LightningModule):
         max_len,
     ):
         super(OptimalSender, self).__init__()
+
+        # Add one symbol for EOS treatment
+        vocab_size += 1
+
         self.max_len = max_len
 
         self.n_features = n_features
@@ -719,16 +736,23 @@ class SenderReceiver(pl.LightningModule):
         num_layers=1,
     ):
         super(SenderReceiver, self).__init__()
+
+
+        # Add one symbol for EOS treatment
+        vocab_size_production = vocab_size + 1
+
+        # Add two symbols for EOS and noise treatment
+        vocab_size_perception = vocab_size + 2
+
         self.max_len = max_len
         self.speech_acts = speech_acts
         self.embed_input = nn.Linear(n_features*n_values, embed_dim)
 
-        self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.hidden_to_output = nn.Linear(hidden_size, vocab_size_production)
+        self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
 
         self.hidden_size = hidden_size
         self.embed_dim = embed_dim
-        self.vocab_size = vocab_size
         self.num_layers = num_layers
 
         if sender_layer_norm != receiver_layer_norm:
@@ -868,7 +892,7 @@ class SignalingGameModule(pl.LightningModule):
         if not 0 < self.model_hparams.receiver_learning_speed <= 1:
             raise ValueError("Receiver learning speed should be between 0 and 1 ", self.model_hparams.receiver_learning_speed)
 
-        self.token_noise = self.model_hparams["vocab_size"]
+        self.token_noise = self.model_hparams["vocab_size"] + 1
         self.automatic_optimization = False
 
     def init_agents(self):
@@ -1269,7 +1293,7 @@ class SignalingGameModule(pl.LightningModule):
 
         meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
 
-        num_digits = int(math.log10(self.model_hparams.vocab_size))
+        num_digits = int(math.log10(self.model_hparams.vocab_size + 1))
         messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
         messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
@@ -1291,6 +1315,7 @@ class SignalingGameModule(pl.LightningModule):
             print("posdis: ", posdis)
 
         if self.model_hparams.log_bosdis_on_validation:
+            # TODO: vocab size with EOS token?
             bosdis = compute_bosdis(meanings, messages, self.model_hparams["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)
