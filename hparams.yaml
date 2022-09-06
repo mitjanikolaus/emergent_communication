@@ -5,10 +5,10 @@ model:
   alt_agents: false
   load_checkpoint: null
   baseline_type: mean
-  length_cost: 0
-  max_len: 3
-  num_features: 2
-  num_values: 100
+  length_cost: 0.1
+  max_len: 5
+  num_features: 4
+  num_values: 4
   num_senders: 1
   num_receivers: 1
   receiver_embed_dim: 30
@@ -21,19 +21,19 @@ model:
   sender_aux_loss: false
   sender_aux_loss_2: false
   sender_embed_dim: 5
-  sender_entropy_coeff: 0.5
-  receiver_entropy_coeff: 0.5
+  sender_entropy_coeff: 0.3
+  receiver_entropy_coeff: 0.3
   sender_num_layers: 1
   receiver_layer_norm: true
   sender_layer_norm: true
   sender_hidden_dim: 500
   sender_learning_speed: 1
-  vocab_size: 100
-  noise: 0
-  multi_turn: false
-  log_topsim_on_validation: true
-  log_posdis_on_validation: true
-  log_bosdis_on_validation: true
+  vocab_size: 4
+  noise: 0.1
+  multi_turn: true
+  log_topsim_on_validation: false
+  log_posdis_on_validation: false
+  log_bosdis_on_validation: false
   log_entropy_on_validation: false
 trainer:
   default_hp_metric: false
