@@ -312,7 +312,7 @@ class Receiver(nn.Module):
         self.max_len = max_len
 
         lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
-        self.cells_perception = nn.ModuleList(
+        self.cells = nn.ModuleList(
             [
                 lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
@@ -320,15 +320,6 @@ class Receiver(nn.Module):
                 for i in range(num_layers)
             ]
         )
-        self.cells_production = self.cells_perception
-        # self.cells_production = nn.ModuleList(
-        #     [
-        #         lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
-        #         if i == 0
-        #         else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
-        #         for i in range(num_layers)
-        #     ]
-        # )
 
         self.fc1 = nn.Linear(n_features*n_values, hidden_size)
 
@@ -355,7 +346,7 @@ class Receiver(nn.Module):
         hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
         for step in range(max_message_len):
             lstm_input = embedded_message[:, step]
-            for i, layer in enumerate(self.cells_perception):
+            for i, layer in enumerate(self.cells):
                 h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
@@ -383,7 +374,7 @@ class Receiver(nn.Module):
         all_step_logits = []
 
         for step in range(self.max_len):
-            for i, layer in enumerate(self.cells_production):
+            for i, layer in enumerate(self.cells):
                 h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
@@ -429,7 +420,7 @@ class Receiver(nn.Module):
         hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
         for step in range(max_message_len):
             lstm_input = embedded_message[:, step]
-            for i, layer in enumerate(self.cells_perception):
+            for i, layer in enumerate(self.cells):
                 h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
