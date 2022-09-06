@@ -503,8 +503,6 @@ class Sender(pl.LightningModule):
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding_perc = nn.Embedding(vocab_size, embed_dim)
         self.embedding_prod = nn.Embedding(vocab_size, embed_dim)
-        self.embedding_prod_turn_2 = nn.Embedding(vocab_size, embed_dim)
-
 
         self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
 
@@ -524,17 +522,7 @@ class Sender(pl.LightningModule):
             ]
         )
 
-        #TODO: separate LSTMs for production turn 1/ turn 2?
         self.cells_production = nn.ModuleList(
-            [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
-                if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
-                for i in range(self.num_layers)
-            ]
-        )
-
-        self.cells_production_turn_2 = nn.ModuleList(
             [
                 lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
@@ -630,7 +618,6 @@ class Sender(pl.LightningModule):
 
         input = torch.stack([self.sos_embedding] * batch_size)
 
-        # prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input) for _ in range(self.num_layers)]
         prev_c = [
             torch.zeros((batch_size, self.hidden_size)).type_as(input) for _ in range(self.num_layers)
         ]
@@ -641,7 +628,7 @@ class Sender(pl.LightningModule):
         all_step_logits = []
 
         for step in range(self.max_len):
-            for i, layer in enumerate(self.cells_production_turn_2):
+            for i, layer in enumerate(self.cells_production):
                 h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
                 prev_c[i] = c_t
                 prev_hidden[i] = h_t
@@ -658,7 +645,7 @@ class Sender(pl.LightningModule):
             logits.append(distr.log_prob(messages))
             all_step_logits.append(step_logits)
 
-            input = self.embedding_prod_turn_2(messages)
+            input = self.embedding_prod(messages)
             sequence.append(messages)
 
         sequence = torch.stack(sequence).permute(1, 0)
