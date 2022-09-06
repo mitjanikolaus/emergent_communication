@@ -299,7 +299,7 @@ class AltReceiver(nn.Module):
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, max_len, n_features, n_values, layer_norm, num_layers
+            self, vocab_size, embed_dim, hidden_size, max_len, n_features, n_values, layer_norm, num_layers, open_cr
     ):
         super(Receiver, self).__init__()
 
@@ -330,7 +330,13 @@ class Receiver(nn.Module):
 
         self.linear_out = nn.Linear(hidden_size, n_features*n_values)
 
-        self.embed_message = nn.Linear(hidden_size, hidden_size)
+        self.open_cr = open_cr
+
+        if self.open_cr:
+            # Open clarification request: receiver can only answer with binary feedback signal
+            self.embed_message = nn.Linear(hidden_size, 2)
+        else:
+            self.embed_message = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size_production)
 
@@ -363,51 +369,66 @@ class Receiver(nn.Module):
 
         output = self.linear_out(encoded_message)
 
+        message_embedded = self.embed_message(encoded_message)
+
         # Create response:
-        prev_hidden = [self.embed_message(encoded_message)]
-        prev_hidden.extend(
-            [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
-        )
-        prev_c = [
-            torch.zeros((batch_size, self.hidden_size)).type_as(encoded_message) for _ in range(self.num_layers)
-        ]
-        input = torch.stack([self.sos_embedding] * batch_size)
-
-        sequence = []
-        logits = []
-        entropy = []
-        all_step_logits = []
-
-        for step in range(self.max_len):
-            for i, layer in enumerate(self.cells):
-                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
-                prev_hidden[i] = h_t
-                input = h_t
-
-            step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
+        if self.open_cr:
+            step_logits = F.log_softmax(message_embedded)
             distr = Categorical(logits=step_logits)
-            entropy.append(distr.entropy())
-
             if self.training:
                 x = distr.sample()
             else:
                 x = step_logits.argmax(dim=1)
-            logits.append(distr.log_prob(x))
-            all_step_logits.append(step_logits)
-            input = self.embedding_prod(x)
-            sequence.append(x)
+            sequence = x.unsqueeze(1)
+            logits = distr.log_prob(x).unsqueeze(1)
+            entropy = distr.entropy().unsqueeze(1)
+            all_step_logits = step_logits.unsqueeze(1)
 
-        sequence = torch.stack(sequence).permute(1, 0)
-        logits = torch.stack(logits).permute(1, 0)
-        entropy = torch.stack(entropy).permute(1, 0)
-        all_step_logits = torch.stack(all_step_logits).permute(1, 0, 2)
+        else:
+            prev_hidden = [message_embedded]
+            prev_hidden.extend(
+                [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
+            )
+            prev_c = [
+                torch.zeros((batch_size, self.hidden_size)).type_as(encoded_message) for _ in range(self.num_layers)
+            ]
+            input = torch.stack([self.sos_embedding] * batch_size)
 
-        zeros = torch.zeros((sequence.size(0), 1)).type_as(encoded_message)
+            sequence = []
+            logits = []
+            entropy = []
+            all_step_logits = []
 
-        sequence = torch.cat([sequence, zeros.long()], dim=1)
-        logits = torch.cat([logits, zeros], dim=1)
-        entropy = torch.cat([entropy, zeros], dim=1)
+            for step in range(self.max_len):
+                for i, layer in enumerate(self.cells):
+                    h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
+                    prev_c[i] = c_t
+                    prev_hidden[i] = h_t
+                    input = h_t
+
+                step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
+                distr = Categorical(logits=step_logits)
+                entropy.append(distr.entropy())
+
+                if self.training:
+                    x = distr.sample()
+                else:
+                    x = step_logits.argmax(dim=1)
+                logits.append(distr.log_prob(x))
+                all_step_logits.append(step_logits)
+                input = self.embedding_prod(x)
+                sequence.append(x)
+
+            sequence = torch.stack(sequence).permute(1, 0)
+            logits = torch.stack(logits).permute(1, 0)
+            entropy = torch.stack(entropy).permute(1, 0)
+            all_step_logits = torch.stack(all_step_logits).permute(1, 0, 2)
+
+            zeros = torch.zeros((sequence.size(0), 1)).type_as(encoded_message)
+
+            sequence = torch.cat([sequence, zeros.long()], dim=1)
+            logits = torch.cat([logits, zeros], dim=1)
+            entropy = torch.cat([entropy, zeros], dim=1)
 
         return output, sequence, logits, entropy, all_step_logits, encoded_message
 
@@ -957,7 +978,8 @@ class SignalingGameModule(pl.LightningModule):
                         Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
                                  self.model_hparams.receiver_hidden_dim, self.model_hparams.max_len,
                                  self.model_hparams.num_features, self.model_hparams.num_values,
-                                 self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers)
+                                 self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers,
+                                 self.model_hparams.open_cr)
                         for _ in range(self.model_hparams.num_receivers)
                     ]
                 )

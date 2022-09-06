@@ -31,6 +31,7 @@ model:
   vocab_size: 4
   noise: 0.1
   multi_turn: true
+  open_cr: true
   log_topsim_on_validation: false
   log_posdis_on_validation: false
   log_bosdis_on_validation: false
