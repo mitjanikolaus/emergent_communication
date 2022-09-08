@@ -303,16 +303,13 @@ class Receiver(nn.Module):
     ):
         super(Receiver, self).__init__()
 
-        # Add one symbol for EOS treatment
-        vocab_size_production = vocab_size + 1
-
-        # Add two symbols for EOS and noise treatment
-        vocab_size_perception = vocab_size + 2
+        # Add one symbol for noise treatment
+        vocab_size_perception = vocab_size + 1
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
         self.embedding_perc = nn.Embedding(vocab_size_perception, embed_dim)
-        self.embedding_prod = nn.Embedding(vocab_size_production, embed_dim)
+        self.embedding_prod = nn.Embedding(vocab_size, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -338,7 +335,7 @@ class Receiver(nn.Module):
         else:
             self.embed_message = nn.Linear(hidden_size, hidden_size)
 
-        self.hidden_to_output = nn.Linear(hidden_size, vocab_size_production)
+        self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
         self.attn_1 = nn.Linear(hidden_size, hidden_size)
         self.attn_2 = nn.Linear(hidden_size, hidden_size)
@@ -475,8 +472,8 @@ class ReceiverMLP(nn.Module):
     ):
         super(ReceiverMLP, self).__init__()
 
-        # Add two symbols for EOS and noise treatment
-        vocab_size += 2
+        # Add one symbol for noise treatment
+        vocab_size += 1
 
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.linear_message = nn.Linear(embed_dim * (max_message_len + 1), embed_dim)
@@ -510,9 +507,6 @@ class Sender(pl.LightningModule):
         num_layers,
     ):
         super(Sender, self).__init__()
-
-        # Add one symbol for EOS treatment
-        vocab_size += 1
 
         self.max_len = max_len
 
@@ -691,9 +685,6 @@ class OptimalSender(pl.LightningModule):
     ):
         super(OptimalSender, self).__init__()
 
-        # Add one symbol for EOS treatment
-        vocab_size += 1
-
         self.max_len = max_len
 
         self.n_features = n_features
@@ -758,18 +749,14 @@ class SenderReceiver(pl.LightningModule):
     ):
         super(SenderReceiver, self).__init__()
 
-
-        # Add one symbol for EOS treatment
-        vocab_size_production = vocab_size + 1
-
-        # Add two symbols for EOS and noise treatment
-        vocab_size_perception = vocab_size + 2
+        # Add one symbol for noise treatment
+        vocab_size_perception = vocab_size + 1
 
         self.max_len = max_len
         self.speech_acts = speech_acts
         self.embed_input = nn.Linear(n_features*n_values, embed_dim)
 
-        self.hidden_to_output = nn.Linear(hidden_size, vocab_size_production)
+        self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
 
         self.hidden_size = hidden_size
@@ -788,7 +775,6 @@ class SenderReceiver(pl.LightningModule):
                 for i in range(self.num_layers)
             ]
         )
-
 
     def forward(self, batch):
         if isinstance(batch, tuple):
@@ -1315,7 +1301,7 @@ class SignalingGameModule(pl.LightningModule):
 
         meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
 
-        num_digits = int(math.log10(self.model_hparams.vocab_size + 1))
+        num_digits = int(math.log10(self.model_hparams.vocab_size))
         messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
         messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
@@ -1337,11 +1323,9 @@ class SignalingGameModule(pl.LightningModule):
             print("posdis: ", posdis)
 
         if self.model_hparams.log_bosdis_on_validation:
-            # TODO: vocab size with EOS token?
             bosdis = compute_bosdis(meanings, messages, self.model_hparams["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)
-
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning
