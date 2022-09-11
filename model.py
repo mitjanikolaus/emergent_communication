@@ -9,7 +9,7 @@ from torch import nn, jit
 import torch.nn.functional as F
 from torch.distributions import Categorical
 import pytorch_lightning as pl
-from torch.nn import ModuleList, Parameter
+from torch.nn import ModuleList, Parameter, GRUCell
 
 import pandas as pd
 
@@ -315,12 +315,12 @@ class Receiver(nn.Module):
         self.num_layers = num_layers
         self.max_len = max_len
 
-        lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
+        rnn_cell = GRUCell
         self.cells = nn.ModuleList(
             [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(num_layers)
             ]
         )
@@ -346,19 +346,15 @@ class Receiver(nn.Module):
         embedded_message = self.embedding_perc(messages)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
-        prev_c = [
-            torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)
-        ]
 
         max_message_len = embedded_message.shape[1]
         hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
         for step in range(max_message_len):
-            lstm_input = embedded_message[:, step]
+            rnn_input = embedded_message[:, step]
             for i, layer in enumerate(self.cells):
-                h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(rnn_input, prev_hidden[i])
                 prev_hidden[i] = h_t
-                lstm_input = h_t
+                rnn_input = h_t
 
             hidden_states[:, step] = h_t
         # TODO: verify message lengths
@@ -386,9 +382,6 @@ class Receiver(nn.Module):
             prev_hidden.extend(
                 [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
             )
-            prev_c = [
-                torch.zeros((batch_size, self.hidden_size)).type_as(encoded_message) for _ in range(self.num_layers)
-            ]
             input = torch.stack([self.sos_embedding] * batch_size)
 
             sequence = []
@@ -398,8 +391,7 @@ class Receiver(nn.Module):
 
             for step in range(self.max_len):
                 for i, layer in enumerate(self.cells):
-                    h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                    prev_c[i] = c_t
+                    h_t = layer(input, prev_hidden[i])
                     prev_hidden[i] = h_t
                     input = h_t
 
@@ -435,19 +427,15 @@ class Receiver(nn.Module):
         embedded_message = self.embedding_perc(messages_2)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)]
-        prev_c = [
-            torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)
-        ]
 
         max_message_len = embedded_message.shape[1]
         hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
         for step in range(max_message_len):
-            lstm_input = embedded_message[:, step]
+            rnn_input = embedded_message[:, step]
             for i, layer in enumerate(self.cells):
-                h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(rnn_input, prev_hidden[i])
                 prev_hidden[i] = h_t
-                lstm_input = h_t
+                rnn_input = h_t
 
             hidden_states[:, step] = h_t
 
@@ -517,7 +505,7 @@ class Sender(pl.LightningModule):
         self.linear_in_perc = nn.Linear(n_features * n_values, hidden_size)
         self.linear_in_prod = nn.Linear(hidden_size * 2, hidden_size)
 
-        self.embed_input_lstm = nn.Linear(hidden_size, hidden_size)
+        self.embed_input_rnn = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding_perc = nn.Embedding(vocab_size, embed_dim)
@@ -530,13 +518,13 @@ class Sender(pl.LightningModule):
         self.vocab_size = vocab_size
         self.num_layers = num_layers
 
-        lstm_cell = LayerNormLSTMCell if layer_norm else nn.LSTMCell
+        rnn_cell = GRUCell
 
         self.cells = nn.ModuleList(
             [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
@@ -548,9 +536,6 @@ class Sender(pl.LightningModule):
         prev_hidden.extend(
             [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
         )
-        prev_c = [
-            torch.zeros((batch_size, self.hidden_size)).type_as(input_objects) for _ in range(self.num_layers)
-        ]
 
         input = torch.stack([self.sos_embedding] * batch_size)
 
@@ -560,8 +545,7 @@ class Sender(pl.LightningModule):
 
         for step in range(self.max_len):
             for i, layer in enumerate(self.cells):
-                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(input, prev_hidden[i])
                 prev_hidden[i] = h_t
                 input = h_t
 
@@ -597,25 +581,21 @@ class Sender(pl.LightningModule):
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in
                     range(self.num_layers)]
-        prev_c = [
-         torch.zeros((batch_size, self.hidden_size)).type_as(embedded_message) for _ in range(self.num_layers)
-        ]
 
         max_message_len = embedded_message.shape[1]
         hidden_states = torch.zeros((batch_size, max_message_len, self.hidden_size)).type_as(embedded_message)
         for step in range(max_message_len):
-            lstm_input = embedded_message[:, step]
+            rnn_input = embedded_message[:, step]
             for i, layer in enumerate(self.cells):
-                h_t, c_t = layer(lstm_input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(rnn_input, prev_hidden[i])
                 prev_hidden[i] = h_t
-                lstm_input = h_t
+                rnn_input = h_t
 
         hidden_states[:, step] = h_t
 
         encoded_message = hidden_states[range(batch_size), message_lengths-1]
 
-        input_msg = self.embed_input_lstm(encoded_message)
+        input_msg = self.embed_input_rnn(encoded_message)
 
         input_obj = self.embed_input(input_objects)
 
@@ -628,10 +608,6 @@ class Sender(pl.LightningModule):
 
         input = torch.stack([self.sos_embedding] * batch_size)
 
-        prev_c = [
-            torch.zeros((batch_size, self.hidden_size)).type_as(input) for _ in range(self.num_layers)
-        ]
-
         sequence = []
         logits = []
         entropy = []
@@ -639,8 +615,7 @@ class Sender(pl.LightningModule):
 
         for step in range(self.max_len):
             for i, layer in enumerate(self.cells):
-                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(input, prev_hidden[i])
                 prev_hidden[i] = h_t
                 input = h_t
 
@@ -766,12 +741,12 @@ class SenderReceiver(pl.LightningModule):
         if sender_layer_norm != receiver_layer_norm:
             raise ValueError("Joint Sender and Receiver requires both sender_layer_norm and receiver_layer_norm to be "
                              "set to true or false at the same time")
-        lstm_cell = LayerNormLSTMCell if sender_layer_norm else nn.LSTMCell
+        rnn_cell = GRUCell
         self.cells = nn.ModuleList(
             [
-                lstm_cell(input_size=embed_dim, hidden_size=hidden_size)
+                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else lstm_cell(input_size=hidden_size, hidden_size=hidden_size)
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
@@ -787,9 +762,6 @@ class SenderReceiver(pl.LightningModule):
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)]
 
-        prev_c = [
-            torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)
-        ]
         input = self.embed_input(x)
 
         sequence = []
@@ -798,8 +770,7 @@ class SenderReceiver(pl.LightningModule):
 
         for step in range(self.max_len):
             for i, layer in enumerate(self.cells):
-                h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                prev_c[i] = c_t
+                h_t = layer(input, prev_hidden[i])
                 prev_hidden[i] = h_t
                 input = h_t
 
@@ -839,16 +810,10 @@ class SenderReceiver(pl.LightningModule):
             prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input_receiver) for _ in
                            range(self.num_layers)]
 
-            prev_c = [
-                torch.zeros((batch_size, self.hidden_size)).type_as(input_receiver) for _ in range(self.num_layers)
-            ]
-
-
             perplexities_objects = []
             for step in range(self.max_len):
                 for i, layer in enumerate(self.cells):
-                    h_t, c_t = layer(input, (prev_hidden[i], prev_c[i]))
-                    prev_c[i] = c_t
+                    h_t = layer(input, prev_hidden[i])
                     prev_hidden[i] = h_t
                     input = h_t
 
