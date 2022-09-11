@@ -864,7 +864,7 @@ class SignalingGameModule(pl.LightningModule):
         if not 0 < self.model_hparams.receiver_learning_speed <= 1:
             raise ValueError("Receiver learning speed should be between 0 and 1 ", self.model_hparams.receiver_learning_speed)
 
-        self.token_noise = self.model_hparams["vocab_size"] + 1
+        self.token_noise = self.model_hparams["vocab_size"]
         self.automatic_optimization = False
 
     def init_agents(self):
