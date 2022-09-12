@@ -14,11 +14,6 @@ model:
   receiver_num_layers: 1
   receiver_hidden_dim: 500
   receiver_learning_speed: 1
-  receiver_aux_loss: false
-  receiver_aux_loss_2: false
-  receiver_aux_loss_3: false
-  sender_aux_loss: false
-  sender_aux_loss_2: false
   sender_embed_dim: 5
   sender_entropy_coeff: 0.5
   receiver_entropy_coeff: 0.5
@@ -29,8 +24,8 @@ model:
   sender_learning_speed: 1
   vocab_size: 5 # Including the EOS token!
   noise: 0
-  multi_turn: false
-  open_cr: false
+  clarification_requests: false
+  open_cr: false  # Currently not implemented!
   log_topsim_on_validation: false
   log_posdis_on_validation: false
   log_bosdis_on_validation: false

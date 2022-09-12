@@ -34,11 +34,15 @@ class MeanBaseline():
         return self.mean_baseline
 
 
-def find_lengths(messages: torch.Tensor) -> torch.Tensor:
-    # Return lengths, including the EOS symbol
+def find_lengths(messages: torch.Tensor, stop_at_eos=True) -> torch.Tensor:
     max_k = messages.size(1)
-    zero_mask = messages == 0
-    lengths = max_k - (zero_mask.cumsum(dim=1) > 0).sum(dim=1)
+    if stop_at_eos:
+        zero_mask = messages == 0
+        lengths = max_k - (zero_mask.cumsum(dim=1) > 0).sum(dim=1)
+    else:
+        lengths = (messages != 0).sum(dim=1)
+
+    # Add 1 to avoid 0 length
     lengths.add_(1).clamp_(max=max_k)
 
     return lengths
