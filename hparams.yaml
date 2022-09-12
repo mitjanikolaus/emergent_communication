@@ -2,7 +2,6 @@ seed: 1
 model:
   symmetric: false
   optimal_sender: false
-  alt_agents: false
   load_checkpoint: null
   baseline_type: mean
   length_cost: 0
