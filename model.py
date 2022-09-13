@@ -621,8 +621,12 @@ class SignalingGameModule(pl.LightningModule):
 
         sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_first_turn(sender_input)
         sender_entropies.append(sender_step_entropy)
-        messages_sender.append(sender_output_tokens)
         sender_logits.append(sender_step_logits)
+        original_messages_sender.append(sender_output_tokens)
+
+        sender_output_tokens_detached = sender_output_tokens.detach().clone()
+        sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
+        messages_sender.append(sender_output_tokens_detached)
 
         receiver_output_tokens, receiver_prev_hidden, receiver_entropy, receiver_step_logits = receiver.forward_first_turn(sender_output_tokens)
         receiver_entropies.append(receiver_entropy)
@@ -638,13 +642,13 @@ class SignalingGameModule(pl.LightningModule):
 
             sender_entropies.append(sender_step_entropy)
             sender_logits.append(sender_step_logits)
-            sender_output_tokens_noise = sender_output_tokens.detach().clone()
             original_messages_sender.append(sender_output_tokens)
-            if not disable_noise:
-                sender_output_tokens_noise = self.add_noise(sender_output_tokens_noise)
-            messages_sender.append(sender_output_tokens_noise)
 
-            receiver_output_tokens, receiver_prev_hidden, receiver_entropy, receiver_step_logits = receiver.forward(sender_output_tokens_noise, receiver_prev_hidden)
+            sender_output_tokens_detached = sender_output_tokens.detach().clone()
+            sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
+            messages_sender.append(sender_output_tokens_detached)
+
+            receiver_output_tokens, receiver_prev_hidden, receiver_entropy, receiver_step_logits = receiver.forward(sender_output_tokens_detached, receiver_prev_hidden)
             receiver_entropies.append(receiver_entropy)
             receiver_logits.append(receiver_step_logits)
             receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
@@ -747,14 +751,13 @@ class SignalingGameModule(pl.LightningModule):
             self.baselines["length_sender"].update(messages_sender_lengths.float())
             if self.model_hparams.clarification_requests:
                 self.baselines["length_receiver"].update(messages_receiver_lengths.float())
-                # self.baselines["length_sender_2"].update(messages_sender_2_lengths.float())
 
         if return_messages:
             return optimized_loss, acc, messages_sender
         else:
             return optimized_loss, acc
 
-    def add_noise(self, messages):
+    def add_noise(self, messages, disable_noise=False):
         if self.model_hparams.noise > 0:
             indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
                                         messages.numel(), replacement=True)
