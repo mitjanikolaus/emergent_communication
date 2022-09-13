@@ -89,6 +89,9 @@ class Receiver(nn.Module):
 
         self.linear_out = nn.Linear(hidden_size, n_features * n_values)
 
+        self.pre_attn = nn.Linear(hidden_size, hidden_size)
+        self.attn = nn.Linear(hidden_size, max_len)
+
     def forward_first_turn(self, messages):
         batch_size = messages.shape[0]
 
@@ -98,10 +101,8 @@ class Receiver(nn.Module):
         return self.forward(messages, prev_hidden)
 
     def forward(self, messages, prev_hidden):
-        # Encode message
-        embedded_message = self.embedding_perc(messages)
+        rnn_input = self.embedding_perc(messages)
 
-        rnn_input = embedded_message
         for i, layer in enumerate(self.cells):
             h_t = layer(rnn_input, prev_hidden[i])
             prev_hidden[i] = h_t
@@ -118,14 +119,18 @@ class Receiver(nn.Module):
 
         logits = distr.log_prob(output_token)
 
-        return output_token, prev_hidden, entropy, logits
+        return output_token, entropy, logits, prev_hidden
 
-    def output(self, hidden_states, message_lengths):
-        batch_size = hidden_states.shape[0]
+    def forward_output(self, hidden_states, message_lengths):
+        hidden_states_transformed = self.pre_attn(hidden_states)
+        hidden_states_summed = torch.sum(hidden_states_transformed, dim=1)
 
-        hidden_states_last_token = hidden_states[range(batch_size), message_lengths-2]
+        attn_weights = F.softmax(self.attn(hidden_states_summed), dim=1)
+        weighted_hidden_states = torch.sum(hidden_states * attn_weights.unsqueeze(2), dim=1)
 
-        return self.linear_out(hidden_states_last_token)
+        out = self.linear_out(weighted_hidden_states)
+
+        return out
 
 
 class ReceiverMLP(nn.Module):
@@ -231,7 +236,6 @@ class Sender(pl.LightningModule):
         embedded_output_last_turn = self.embedding_prod(output_last_turn)
 
         if self.clarification_requests:
-            assert input_response != None
             embedded_input = self.embedding_prod(input_response)
             inputs = torch.cat((embedded_input, embedded_output_last_turn), dim=1)
         else:
@@ -628,14 +632,14 @@ class SignalingGameModule(pl.LightningModule):
         sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
         messages_sender.append(sender_output_tokens_detached)
 
-        receiver_output_tokens, receiver_prev_hidden, receiver_entropy, receiver_step_logits = receiver.forward_first_turn(sender_output_tokens)
-        receiver_entropies.append(receiver_entropy)
+        receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(sender_output_tokens)
+        receiver_entropies.append(receiver_step_entropy)
         receiver_logits.append(receiver_step_logits)
         receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
 
         for step in range(1, self.model_hparams.max_len):
             if self.model_hparams.clarification_requests:
-                input_cr = receiver_output_tokens
+                input_cr = receiver_output_tokens.detach()
             else:
                 input_cr = None
             sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_cr)
@@ -648,8 +652,8 @@ class SignalingGameModule(pl.LightningModule):
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
             messages_sender.append(sender_output_tokens_detached)
 
-            receiver_output_tokens, receiver_prev_hidden, receiver_entropy, receiver_step_logits = receiver.forward(sender_output_tokens_detached, receiver_prev_hidden)
-            receiver_entropies.append(receiver_entropy)
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward(sender_output_tokens_detached, receiver_prev_hidden)
+            receiver_entropies.append(receiver_step_entropy)
             receiver_logits.append(receiver_step_logits)
             receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
             messages_receiver.append(receiver_output_tokens)
@@ -658,12 +662,6 @@ class SignalingGameModule(pl.LightningModule):
         sender_logits = torch.stack(sender_logits).permute(1, 0)
         sender_entropies = torch.stack(sender_entropies).permute(1, 0)
 
-        zeros = torch.zeros((messages_sender.size(0), 1)).type_as(sender_input)
-
-        messages_sender = torch.cat([messages_sender, zeros.long()], dim=1)
-        sender_logits = torch.cat([sender_logits, zeros], dim=1)
-        sender_entropies = torch.cat([sender_entropies, zeros], dim=1)
-
         messages_sender_lengths = find_lengths(messages_sender)
         self.log(f"message_lengths", messages_sender_lengths.float().mean() - 1)
 
@@ -671,14 +669,29 @@ class SignalingGameModule(pl.LightningModule):
         receiver_logits = torch.stack(receiver_logits).permute(1, 0)
         receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
 
-        messages_receiver = torch.cat([messages_receiver, zeros.long()], dim=1)
-        receiver_logits = torch.cat([receiver_logits, zeros], dim=1)
-        receiver_entropies = torch.cat([receiver_entropies, zeros], dim=1)
-
         messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
         self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean() - 1)
 
-        receiver_output = receiver.output(receiver_hidden_states, messages_sender_lengths)
+        # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
+        effective_entropy_s_1 = torch.zeros(batch_size).type_as(sender_input)
+
+        # the log prob of the choices made by S before and including the eos symbol - again, we don't
+        # care about the rest
+        effective_log_prob_s = torch.zeros(batch_size).type_as(sender_input)
+
+        for i in range(messages_sender.size(1)):
+            not_eosed = (i < messages_sender_lengths).float()
+            effective_entropy_s_1 += sender_entropies[:, i] * not_eosed
+            effective_log_prob_s += sender_logits[:, i] * not_eosed
+            receiver_hidden_states[i >= messages_sender_lengths, i] = 0
+        effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_lengths.float()
+
+        entropy_loss = effective_entropy_s_1.mean() * self.sender_entropy_coeff
+
+        baseline = self.baselines["length_sender_1"].predict(messages_sender_lengths.device)
+        policy_length_loss = (messages_sender_lengths.float() - baseline) * self.length_cost * effective_log_prob_s
+
+        receiver_output = receiver.forward_output(receiver_hidden_states, messages_sender_lengths)
 
         receiver_output = receiver_output.view(batch_size, self.num_features, self.num_values)
 
@@ -692,26 +705,9 @@ class SignalingGameModule(pl.LightningModule):
         receiver_loss = F.cross_entropy(receiver_output, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
 
         self.log(f"receiver_loss", receiver_loss.mean())
-
         assert len(receiver_loss) == batch_size
 
-        # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
-        effective_entropy_s_1 = torch.zeros(batch_size).type_as(sender_input)
 
-        # the log prob of the choices made by S before and including the eos symbol - again, we don't
-        # care about the rest
-        effective_log_prob_s = torch.zeros(batch_size).type_as(sender_input)
-
-        for i in range(messages_sender.size(1)):
-            not_eosed = (i < messages_sender_lengths).float()
-            effective_entropy_s_1 += sender_entropies[:, i] * not_eosed
-            effective_log_prob_s += sender_logits[:, i] * not_eosed
-        effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_lengths.float()
-
-        entropy_loss = effective_entropy_s_1.mean() * self.sender_entropy_coeff
-
-        baseline = self.baselines["length_sender_1"].predict(messages_sender_lengths.device)
-        policy_length_loss = (messages_sender_lengths.float() - baseline) * self.length_cost * effective_log_prob_s
 
         if self.model_hparams.clarification_requests:
             effective_entropy_r = torch.zeros(batch_size).type_as(sender_input)
@@ -743,7 +739,6 @@ class SignalingGameModule(pl.LightningModule):
         optimized_loss = policy_length_loss + policy_loss - entropy_loss
 
         # add the differentiable loss terms
-        # TODO no differentiable loss?
         optimized_loss += receiver_loss.mean()
 
         if self.training:
@@ -758,7 +753,7 @@ class SignalingGameModule(pl.LightningModule):
             return optimized_loss, acc
 
     def add_noise(self, messages, disable_noise=False):
-        if self.model_hparams.noise > 0:
+        if not disable_noise and self.model_hparams.noise > 0:
             indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
                                         messages.numel(), replacement=True)
             indices = indices.reshape(messages.shape)
@@ -818,10 +813,6 @@ class SignalingGameModule(pl.LightningModule):
         self.analyze_language(messages, meanings)
 
     def analyze_language(self, messages, meanings):
-        # Remove trailing 0s
-        assert torch.all(messages[:, -1] == 0), "Messages do not contain trailing 0"
-        messages = messages[:, :-1]
-
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
