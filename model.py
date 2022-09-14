@@ -61,7 +61,6 @@ class Receiver(nn.Module):
         self.linear_in_perc = nn.Linear(hidden_size, hidden_size)
 
         self.embedding_perc = nn.Embedding(vocab_size_perception, embed_dim)
-        self.embedding_prod = nn.Embedding(vocab_size, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -77,15 +76,11 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.open_cr = open_cr
-        # TODO
-        # if self.open_cr:
-        #     # Open clarification request: receiver can only answer with binary feedback signal
-        #     self.embed_message = nn.Linear(hidden_size, 2)
-        # else:
-        #     self.embed_message = nn.Linear(hidden_size, hidden_size)
-
-        self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
+        if open_cr:
+            # Open clarification request: receiver can only answer with binary feedback signal
+            self.hidden_to_output = nn.Linear(hidden_size, 2)
+        else:
+            self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
         self.linear_out = nn.Linear(hidden_size, n_features * n_values)
 
@@ -173,6 +168,7 @@ class Sender(pl.LightningModule):
         layer_norm,
         num_layers,
         clarification_requests,
+        open_cr = False,
     ):
         super(Sender, self).__init__()
 
@@ -199,6 +195,11 @@ class Sender(pl.LightningModule):
         # Vocab size + 1 for noise handling
         vocab_size_noise = vocab_size + 1
         self.embedding_prod = nn.Embedding(vocab_size_noise, embed_dim)
+
+        if open_cr:
+            self.embedding_response = nn.Embedding(2, embed_dim)
+        else:
+            self.embedding_response = nn.Embedding(vocab_size, embed_dim)
 
         self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
 
@@ -236,7 +237,7 @@ class Sender(pl.LightningModule):
         embedded_output_last_turn = self.embedding_prod(output_last_turn)
 
         if self.clarification_requests:
-            embedded_input = self.embedding_prod(input_response)
+            embedded_input = self.embedding_response(input_response)
             inputs = torch.cat((embedded_input, embedded_output_last_turn), dim=1)
         else:
             inputs = embedded_output_last_turn
@@ -516,7 +517,7 @@ class SignalingGameModule(pl.LightningModule):
                                self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
                                self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
                                self.model_hparams.sender_layer_norm, self.model_hparams.sender_num_layers,
-                               self.model_hparams.clarification_requests)
+                               self.model_hparams.clarification_requests, self.model_hparams.open_cr)
                         for _ in range(self.model_hparams.num_senders)
                     ]
                 )

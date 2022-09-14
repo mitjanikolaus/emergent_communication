@@ -25,7 +25,7 @@ model:
   vocab_size: 5 # Including the EOS token!
   noise: 0
   clarification_requests: false
-  open_cr: false  # Currently not implemented!
+  open_cr: false
   log_topsim_on_validation: false
   log_posdis_on_validation: false
   log_bosdis_on_validation: false
