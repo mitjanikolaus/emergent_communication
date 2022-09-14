@@ -756,9 +756,9 @@ class SignalingGameModule(pl.LightningModule):
         if not disable_noise and self.model_hparams.noise > 0:
             indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
                                         messages.numel(), replacement=True)
-            indices = indices.reshape(messages.shape)
+            indices = indices.reshape(messages.shape).to(messages.device)
             # Replace all randomly selected values (but only if they are not EOS symbols (0))
-            messages[(indices == 1) & (messages.to(indices.device) != 0)] = self.token_noise
+            messages[(indices == 1) & (messages != 0)] = self.token_noise
         return messages
 
     def on_validation_epoch_start(self):
