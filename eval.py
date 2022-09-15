@@ -20,10 +20,10 @@ def run(args):
     print("Loading checkpoint: " + checkpoint)
     model = SignalingGameModule.load_from_checkpoint(checkpoint, **config)
 
-    model.model_hparams.log_topsim_on_validation = True
-    model.model_hparams.log_posdis_on_validation = True
-    model.model_hparams.log_bosdis_on_validation = True
-    model.model_hparams.log_entropy_on_validation = True
+    model.params.log_topsim_on_validation = True
+    model.params.log_posdis_on_validation = True
+    model.params.log_bosdis_on_validation = True
+    model.params.log_entropy_on_validation = True
 
     datamodule = SignalingGameDataModule(num_features=config["model"]["num_features"],
                                          num_values=config["model"]["num_values"],

@@ -453,92 +453,141 @@ class SenderReceiver(pl.LightningModule):
 
 
 class SignalingGameModule(pl.LightningModule):
-    def __init__(self, **kwargs):
+    def __init__(self, symmetric=False, optimal_sender=False, load_checkpoint=None, baseline_type="mean",
+                 max_len=4, length_cost=0, num_features=4, num_values=4, num_senders=1, num_receivers=1,
+                 receiver_embed_dim=30, receiver_num_layers=500, receiver_hidden_dim=500,
+                 receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
+                 receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
+                 sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
+                 vocab_size=5, noise=0, clarification_requests=False, open_cr=False,
+                 log_topsim_on_validation=False, log_posdis_on_validation=False,
+                 log_bosdis_on_validation=False, log_entropy_on_validation=False, **kwargs):
         super().__init__()
         self.save_hyperparameters()
-        self.model_hparams = AttributeDict(self.hparams["model"])
+        self.params = AttributeDict(self.hparams)
 
         self.init_agents()
 
-        self.num_features = self.model_hparams.num_features
-        self.num_values = self.model_hparams.num_values
+        self.num_features = self.params.num_features
+        self.num_values = self.params.num_values
 
-        self.sender_entropy_coeff = self.model_hparams.sender_entropy_coeff
-        self.receiver_entropy_coeff = self.model_hparams.receiver_entropy_coeff
+        self.sender_entropy_coeff = self.params.sender_entropy_coeff
+        self.receiver_entropy_coeff = self.params.receiver_entropy_coeff
 
-        self.length_cost = self.model_hparams.length_cost
+        self.length_cost = self.params.length_cost
 
-        if self.model_hparams.baseline_type == "mean":
+        if self.params.baseline_type == "mean":
             self.baselines = defaultdict(MeanBaseline)
-        elif self.model_hparams.baseline_type == "none":
+        elif self.params.baseline_type == "none":
             self.baselines = defaultdict(NoBaseline)
         else:
-            raise ValueError("Unknown baseline type: ", self.model_hparams.baseline_type)
+            raise ValueError("Unknown baseline type: ", self.params.baseline_type)
 
-        if not 0 < self.model_hparams.sender_learning_speed <= 1:
-            raise ValueError("Sender learning speed should be between 0 and 1 ", self.model_hparams.sender_learning_speed)
+        if not 0 < self.params.sender_learning_speed <= 1:
+            raise ValueError("Sender learning speed should be between 0 and 1 ", self.params.sender_learning_speed)
 
-        if not 0 < self.model_hparams.receiver_learning_speed <= 1:
-            raise ValueError("Receiver learning speed should be between 0 and 1 ", self.model_hparams.receiver_learning_speed)
+        if not 0 < self.params.receiver_learning_speed <= 1:
+            raise ValueError("Receiver learning speed should be between 0 and 1 ", self.params.receiver_learning_speed)
 
-        self.token_noise = self.model_hparams["vocab_size"]
+        self.token_noise = self.params["vocab_size"]
         self.automatic_optimization = False
 
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        parser = parent_parser.add_argument_group("model")
+        parser.add_argument("--symmetric", default=False, action="store_true")
+        parser.add_argument("--optimal-sender", default=False, action="store_true")
+        parser.add_argument("--load-checkpoint", type=str, default=None)
+        parser.add_argument("--baseline-type", type=str, default="mean")
+
+        parser.add_argument("--num-features", type=int, default=4)
+        parser.add_argument("--num-values", type=int, default=4)
+        parser.add_argument("--num-senders", type=int, default=1)
+        parser.add_argument("--num-receivers", type=int, default=1)
+        parser.add_argument("--vocab-size", type=int, default=5)    # Including the EOS token!
+        parser.add_argument("--max-len", type=int, default=4)   # Excluding EOS token!
+        parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
+
+        parser.add_argument("--noise", type=float, default=0)
+        parser.add_argument("--clarification-requests", default=False, action="store_true")
+        parser.add_argument("--open-cr", default=False, action="store_true")
+
+        parser.add_argument("--log-topsim-on-validation", default=False, action="store_true")
+        parser.add_argument("--log-posdis-on-validation", default=False, action="store_true")
+        parser.add_argument("--log-bosdis-on-validation", default=False, action="store_true")
+        parser.add_argument("--log-entropy-on-validation", default=False, action="store_true")
+
+        parser.add_argument("--sender_embed_dim", type=int, default=5)
+        parser.add_argument("--sender-num-layers", type=int, default=1)
+        parser.add_argument("--sender-hidden-dim", type=int, default=500)
+        parser.add_argument("--sender-learning-speed", type=float, default=1)
+        parser.add_argument("--sender-entropy-coeff", type=float, default=0.5)
+        parser.add_argument("--sender-layer-norm", default=False, action="store_true")
+
+        parser.add_argument("--receiver_embed_dim", type=int, default=30)
+        parser.add_argument("--receiver-num-layers", type=int, default=1)
+        parser.add_argument("--receiver-hidden-dim", type=int, default=500)
+        parser.add_argument("--receiver-learning-speed", type=float, default=1)
+        parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
+        parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
+
+        return parent_parser
+
     def init_agents(self):
-        if self.model_hparams.symmetric:
-            if self.model_hparams.num_senders != self.model_hparams.num_receivers:
+        if self.params.symmetric:
+            if self.params.num_senders != self.params.num_receivers:
                 raise ValueError("Symmetric game requires same number of senders and receivers.")
             self.senders = ModuleList(
                 [
-                    SenderReceiver(self.model_hparams.num_features, self.model_hparams.num_values,
-                        self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
-                        self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
-                        self.model_hparams.sender_layer_norm, self.model_hparams.receiver_layer_norm,
-                        self.model_hparams.sender_num_layers)
-                    for _ in range(self.model_hparams.num_senders * 2)
+                    SenderReceiver(self.params.num_features, self.params.num_values,
+                                   self.params.vocab_size, self.params.sender_embed_dim,
+                                   self.params.sender_hidden_dim, self.params.max_len,
+                                   self.params.sender_layer_norm, self.params.receiver_layer_norm,
+                                   self.params.sender_num_layers)
+                    for _ in range(self.params.num_senders * 2)
                 ]
             )
             self.receivers = self.senders
         else:
-            if self.model_hparams.optimal_sender:
+            if self.params.optimal_sender:
                 self.senders = ModuleList(
                     [
                         OptimalSender(
-                               self.model_hparams.num_features, self.model_hparams.num_values,
-                               self.model_hparams.vocab_size, self.model_hparams.max_len)
-                        for _ in range(self.model_hparams.num_senders)
+                               self.params.num_features, self.params.num_values,
+                               self.params.vocab_size, self.params.max_len)
+                        for _ in range(self.params.num_senders)
                     ]
                 )
             else:
                 self.senders = ModuleList(
                     [
                         Sender(
-                               self.model_hparams.num_features, self.model_hparams.num_values,
-                               self.model_hparams.vocab_size, self.model_hparams.sender_embed_dim,
-                               self.model_hparams.sender_hidden_dim, self.model_hparams.max_len,
-                               self.model_hparams.sender_layer_norm, self.model_hparams.sender_num_layers,
-                               self.model_hparams.clarification_requests, self.model_hparams.open_cr)
-                        for _ in range(self.model_hparams.num_senders)
+                               self.params.num_features, self.params.num_values,
+                               self.params.vocab_size, self.params.sender_embed_dim,
+                               self.params.sender_hidden_dim, self.params.max_len,
+                               self.params.sender_layer_norm, self.params.sender_num_layers,
+                               self.params.clarification_requests, self.params.open_cr)
+                        for _ in range(self.params.num_senders)
                     ]
                 )
             self.receivers = ModuleList(
                 [
-                    Receiver(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
-                             self.model_hparams.receiver_hidden_dim, self.model_hparams.max_len,
-                             self.model_hparams.num_features, self.model_hparams.num_values,
-                             self.model_hparams.receiver_layer_norm, self.model_hparams.receiver_num_layers,
-                             self.model_hparams.open_cr)
-                    for _ in range(self.model_hparams.num_receivers)
+                    Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
+                             self.params.receiver_hidden_dim, self.params.max_len,
+                             self.params.num_features, self.params.num_values,
+                             self.params.receiver_layer_norm, self.params.receiver_num_layers,
+                             self.params.open_cr)
+                    for _ in range(self.params.num_receivers)
                 ]
             )
 
     def init_MLP_receivers(self):
         self.receivers = ModuleList(
             [
-                ReceiverMLP(self.model_hparams.vocab_size, self.model_hparams.receiver_embed_dim,
-                         self.model_hparams.num_features, self.model_hparams.num_values,
-                         self.model_hparams.max_len)
-                for _ in range(self.model_hparams.num_receivers)
+                ReceiverMLP(self.params.vocab_size, self.params.receiver_embed_dim,
+                            self.params.num_features, self.params.num_values,
+                            self.params.max_len)
+                for _ in range(self.params.num_receivers)
             ]
         )
 
@@ -548,7 +597,7 @@ class SignalingGameModule(pl.LightningModule):
                 param.requires_grad = False
 
     def configure_optimizers(self):
-        if self.model_hparams.optimal_sender:
+        if self.params.optimal_sender:
             optimizers_sender = []
         else:
             optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=1e-3) for sender in self.senders]
@@ -559,8 +608,8 @@ class SignalingGameModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         optimizers = self.optimizers()
 
-        if self.model_hparams.symmetric:
-            num_agents = self.model_hparams.num_senders + self.model_hparams.num_receivers
+        if self.params.symmetric:
+            num_agents = self.params.num_senders + self.params.num_receivers
             sender_idx = random.choice(range(num_agents))
             receiver_idx = random.choice(range(num_agents))
             # Avoid communication within same agent
@@ -573,20 +622,20 @@ class SignalingGameModule(pl.LightningModule):
 
         else:
             # Sample sender and receiver for this batch:
-            sender_idx = random.choice(range(self.model_hparams.num_senders))
-            receiver_idx = random.choice(range(self.model_hparams.num_receivers))
+            sender_idx = random.choice(range(self.params.num_senders))
+            receiver_idx = random.choice(range(self.params.num_receivers))
 
-            if self.model_hparams.optimal_sender:
+            if self.params.optimal_sender:
                 opt_sender = None
                 opts_receiver = optimizers
-                if self.model_hparams.num_receivers == 1:
+                if self.params.num_receivers == 1:
                     opt_receiver = opts_receiver
                 else:
                     opt_receiver = opts_receiver[receiver_idx]
 
             else:
-                opts_sender = optimizers[:self.model_hparams.num_senders]
-                opts_receiver = optimizers[self.model_hparams.num_senders:]
+                opts_sender = optimizers[:self.params.num_senders]
+                opts_receiver = optimizers[self.params.num_senders:]
 
                 opt_sender = opts_sender[sender_idx]
                 opt_receiver = opts_receiver[receiver_idx]
@@ -597,11 +646,11 @@ class SignalingGameModule(pl.LightningModule):
         loss, acc = self.forward(batch, sender_idx, receiver_idx)
         self.manual_backward(loss)
 
-        perform_sender_update = torch.rand(1) < self.model_hparams.sender_learning_speed
+        perform_sender_update = torch.rand(1) < self.params.sender_learning_speed
         if perform_sender_update and opt_sender:
             opt_sender.step()
 
-        perform_receiver_update = torch.rand(1) < self.model_hparams.receiver_learning_speed
+        perform_receiver_update = torch.rand(1) < self.params.receiver_learning_speed
         if perform_receiver_update:
             opt_receiver.step()
 
@@ -620,7 +669,7 @@ class SignalingGameModule(pl.LightningModule):
         sender_entropies = []
 
         receiver_entropies = []
-        receiver_hidden_states = torch.zeros((batch_size, self.model_hparams.max_len, self.model_hparams.receiver_hidden_dim)).type_as(sender_input)
+        receiver_hidden_states = torch.zeros((batch_size, self.params.max_len, self.params.receiver_hidden_dim)).type_as(sender_input)
         messages_receiver = []
         receiver_logits = []
 
@@ -638,8 +687,8 @@ class SignalingGameModule(pl.LightningModule):
         receiver_logits.append(receiver_step_logits)
         receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
 
-        for step in range(1, self.model_hparams.max_len):
-            if self.model_hparams.clarification_requests:
+        for step in range(1, self.params.max_len):
+            if self.params.clarification_requests:
                 input_cr = receiver_output_tokens.detach()
             else:
                 input_cr = None
@@ -710,7 +759,7 @@ class SignalingGameModule(pl.LightningModule):
 
 
 
-        if self.model_hparams.clarification_requests:
+        if self.params.clarification_requests:
             effective_entropy_r = torch.zeros(batch_size).type_as(sender_input)
             effective_log_prob_r = torch.zeros(batch_size).type_as(sender_input)
             for i in range(messages_receiver.size(1)):
@@ -745,7 +794,7 @@ class SignalingGameModule(pl.LightningModule):
         if self.training:
             self.baselines["loss"].update(receiver_loss)
             self.baselines["length_sender"].update(messages_sender_lengths.float())
-            if self.model_hparams.clarification_requests:
+            if self.params.clarification_requests:
                 self.baselines["length_receiver"].update(messages_receiver_lengths.float())
 
         if return_messages:
@@ -754,8 +803,8 @@ class SignalingGameModule(pl.LightningModule):
             return optimized_loss, acc
 
     def add_noise(self, messages, disable_noise=False):
-        if not disable_noise and self.model_hparams.noise > 0:
-            indices = torch.multinomial(torch.tensor([1 - self.model_hparams.noise, self.model_hparams.noise]),
+        if not disable_noise and self.params.noise > 0:
+            indices = torch.multinomial(torch.tensor([1 - self.params.noise, self.params.noise]),
                                         messages.numel(), replacement=True)
             indices = indices.reshape(messages.shape).to(messages.device)
             # Replace all randomly selected values (but only if they are not EOS symbols (0))
@@ -764,8 +813,8 @@ class SignalingGameModule(pl.LightningModule):
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
-        if self.model_hparams.symmetric:
-            num_agents = self.model_hparams.num_senders + self.model_hparams.num_receivers
+        if self.params.symmetric:
+            num_agents = self.params.num_senders + self.params.num_receivers
             self.val_epoch_sender_idx = random.choice(range(num_agents))
             self.val_epoch_receiver_idx = random.choice(range(num_agents))
             # Avoid communication within same agent
@@ -773,8 +822,8 @@ class SignalingGameModule(pl.LightningModule):
                 self.val_epoch_sender_idx = random.choice(range(num_agents))
                 self.val_epoch_receiver_idx = random.choice(range(num_agents))
         else:
-            self.val_epoch_sender_idx = random.choice(range(self.model_hparams.num_senders))
-            self.val_epoch_receiver_idx = random.choice(range(self.model_hparams.num_receivers))
+            self.val_epoch_sender_idx = random.choice(range(self.params.num_senders))
+            self.val_epoch_receiver_idx = random.choice(range(self.params.num_receivers))
         print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
 
     def validation_step(self, sender_input, batch_idx, dataloader_idx):
@@ -819,29 +868,29 @@ class SignalingGameModule(pl.LightningModule):
 
         meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
 
-        num_digits = int(math.log10(self.model_hparams.vocab_size))
+        num_digits = int(math.log10(self.params.vocab_size))
         messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
         messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
         messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
-        if self.model_hparams.log_entropy_on_validation:
+        if self.params.log_entropy_on_validation:
             entropy = compute_entropy(messages.numpy())
             self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
 
-        if self.model_hparams.log_topsim_on_validation:
+        if self.params.log_topsim_on_validation:
             topsim = compute_topsim(meanings, messages)
             self.log("topsim", topsim, prog_bar=True)
             print("Topsim: ", topsim)
 
-        if self.model_hparams.log_posdis_on_validation:
+        if self.params.log_posdis_on_validation:
             posdis = compute_posdis(self.num_features, self.num_values, meanings, messages)
             self.log("posdis", posdis, prog_bar=True)
             print("posdis: ", posdis)
 
-        if self.model_hparams.log_bosdis_on_validation:
-            bosdis = compute_bosdis(meanings, messages, self.model_hparams["vocab_size"])
+        if self.params.log_bosdis_on_validation:
+            bosdis = compute_bosdis(meanings, messages, self.params["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)
 

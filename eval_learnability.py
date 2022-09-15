@@ -20,7 +20,7 @@ def run(args):
 
     config['trainer']['log_every_n_steps'] = 10
     config['trainer']['val_check_interval'] = 100
-    model.model_hparams['log_topsim_on_validation'] = False
+    model.params['log_topsim_on_validation'] = False
 
     # model.model_hparams['receiver_aux_loss'] = False
 
@@ -39,8 +39,8 @@ def run(args):
     # Reset receivers
     if args.mlp_receivers:
         model.init_MLP_receivers()
-        model.model_hparams['receiver_aux_loss'] = False
-        model.model_hparams['receiver_embed_dim'] = 32
+        model.params['receiver_aux_loss'] = False
+        model.params['receiver_embed_dim'] = 32
         # model.model_hparams['receiver_hidden_dim'] = 32
 
     # Freeze senders
