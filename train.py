@@ -43,7 +43,11 @@ def get_args():
 
     # add all the available trainer options to argparse
     parser = Trainer.add_argparse_args(parser)
-    parser.set_defaults(max_epochs=-1)
+    parser.set_defaults(max_epochs=-1,
+                        check_val_every_n_epoch=100,
+                        log_every_steps=1000,
+                        num_sanity_val_steps=3
+                        )
 
     # add general and data args
     parser.add_argument("--seed", type=int, default="1")
@@ -59,4 +63,3 @@ if __name__ == '__main__':
     args = get_args()
 
     run(args)
-
