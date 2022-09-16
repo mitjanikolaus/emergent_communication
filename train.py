@@ -37,11 +37,13 @@ def run(config):
 
 def get_args():
     parser = argparse.ArgumentParser()
+
     # add model specific args
     parser = SignalingGameModule.add_model_specific_args(parser)
 
     # add all the available trainer options to argparse
     parser = Trainer.add_argparse_args(parser)
+    parser.set_defaults(max_epochs=-1)
 
     # add general and data args
     parser.add_argument("--seed", type=int, default="1")
