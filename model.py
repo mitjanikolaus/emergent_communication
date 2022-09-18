@@ -724,19 +724,12 @@ class SignalingGameModule(pl.LightningModule):
         messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
         self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean() - 1)
 
-        # the entropy of the outputs of S before and including the eos symbol - as we don't care about what's after
-        effective_entropy_s_1 = torch.zeros(batch_size).type_as(sender_input)
-
-        # the log prob of the choices made by S before and including the eos symbol - again, we don't
-        # care about the rest
-        effective_log_prob_s = torch.zeros(batch_size).type_as(sender_input)
-
         for i in range(messages_sender.size(1)):
-            not_eosed = (i < messages_sender_lengths).float()
-            effective_entropy_s_1 += sender_entropies[:, i] * not_eosed
-            effective_log_prob_s += sender_logits[:, i] * not_eosed
+            sender_entropies[i >= messages_sender_lengths, i] = 0
+            sender_logits[i >= messages_sender_lengths, i] = 0
             receiver_hidden_states[i >= messages_sender_lengths, i] = 0
-        effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_lengths.float()
+        effective_entropy_s_1 = sender_entropies.sum(dim=1) / messages_sender_lengths.float()
+        effective_log_prob_s = sender_logits.sum(dim=1)
 
         entropy_loss = effective_entropy_s_1 * self.sender_entropy_coeff
 
@@ -760,13 +753,11 @@ class SignalingGameModule(pl.LightningModule):
         assert len(receiver_loss) == batch_size
 
         if self.params.clarification_requests:
-            effective_entropy_r = torch.zeros(batch_size).type_as(sender_input)
-            effective_log_prob_r = torch.zeros(batch_size).type_as(sender_input)
             for i in range(messages_receiver.size(1)):
-                not_eosed = (i < messages_receiver_lengths).float()
-                effective_entropy_r += receiver_entropies[:, i] * not_eosed
-                effective_log_prob_r += receiver_logits[:, i] * not_eosed
-            effective_entropy_r = effective_entropy_r / messages_receiver_lengths.float()
+                receiver_entropies[i >= messages_receiver_lengths, i] = 0
+                receiver_logits[i >= messages_receiver_lengths, i] = 0
+            effective_entropy_r = receiver_entropies.sum(dim=1) / messages_receiver_lengths.float()
+            effective_log_prob_r = receiver_logits.sum(dim=1)
 
             entropy_loss = (effective_entropy_s_1 * self.sender_entropy_coeff
                                 + effective_entropy_r * self.receiver_entropy_coeff)
