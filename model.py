@@ -492,7 +492,7 @@ class SignalingGameModule(pl.LightningModule):
         self.token_noise = self.params["vocab_size"]
         self.automatic_optimization = False
 
-        self.best_test_acc_no_noise = 0
+        self.best_val_acc_no_noise = 0
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -830,6 +830,7 @@ class SignalingGameModule(pl.LightningModule):
 
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
+            # TODO: do only if required for logging
             _, acc_no_noise, messages = self.forward(sender_input, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
 
             return sender_input, messages, acc_no_noise
@@ -838,18 +839,18 @@ class SignalingGameModule(pl.LightningModule):
         # Generalization:
         accs = torch.cat([acc for acc, _ in validation_step_outputs[0]])
         accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[0]])
-        test_acc = accs.mean().item()
-        test_acc_no_noise = accs_no_noise.mean().item()
-        self.log("test_acc", test_acc, add_dataloader_idx=False)
-        self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
+        val_acc = accs.mean().item()
+        val_acc_no_noise = accs_no_noise.mean().item()
+        self.log("val_acc", val_acc, add_dataloader_idx=False)
+        self.log("val_acc_no_noise", val_acc_no_noise, add_dataloader_idx=False)
         is_best_checkpoint = False
-        if self.best_test_acc_no_noise < test_acc_no_noise:
-            self.best_test_acc_no_noise = test_acc_no_noise
+        if self.best_val_acc_no_noise < val_acc_no_noise:
+            self.best_val_acc_no_noise = val_acc_no_noise
             is_best_checkpoint = True
-        self.log("best_test_acc_no_noise", self.best_test_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
+        self.log("best_val_acc_no_noise", self.best_val_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
 
-        print("test_acc: ", test_acc)
-        print("test_acc_no_noise: ", test_acc_no_noise)
+        print("val_acc: ", val_acc)
+        print("val_acc_no_noise: ", val_acc_no_noise)
 
         # Language analysis (on train set data)
         language_analysis_results = validation_step_outputs[1]
@@ -860,7 +861,7 @@ class SignalingGameModule(pl.LightningModule):
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
         self.analyze_language(messages, meanings, is_best_checkpoint)
 
-    def analyze_language(self, messages, meanings, is_best_checkpoint):
+    def analyze_language(self, messages, meanings, is_best_checkpoint=False, is_test=False):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
@@ -872,35 +873,57 @@ class SignalingGameModule(pl.LightningModule):
         messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
         messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
-        if self.params.log_entropy_on_validation:
+        if self.params.log_entropy_on_validation or is_test:
             entropy = compute_entropy(messages.numpy())
             self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
             if is_best_checkpoint:
-                self.log("message_entropy_at_best_test_acc", entropy)
+                self.log("message_entropy_at_best_val_acc", entropy)
 
-        if self.params.log_topsim_on_validation:
+        if self.params.log_topsim_on_validation or is_test:
             topsim = compute_topsim(meanings, messages)
             self.log("topsim", topsim, prog_bar=True)
             print("Topsim: ", topsim)
             if is_best_checkpoint:
-                self.log("topsim_at_best_test_acc", topsim)
+                self.log("topsim_at_best_val_acc", topsim)
 
-        if self.params.log_posdis_on_validation:
+        if self.params.log_posdis_on_validation or is_test:
             posdis = compute_posdis(self.num_features, self.num_values, meanings, messages)
             self.log("posdis", posdis, prog_bar=True)
             print("posdis: ", posdis)
             if is_best_checkpoint:
-                self.log("posdis_at_best_test_acc", posdis)
+                self.log("posdis_at_best_val_acc", posdis)
 
-        if self.params.log_bosdis_on_validation:
+        if self.params.log_bosdis_on_validation or is_test:
             bosdis = compute_bosdis(meanings, messages, self.params["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)
             if is_best_checkpoint:
-                self.log("bosdis_at_best_test_acc", bosdis)
+                self.log("bosdis_at_best_val_acc", bosdis)
+
+    def test_step(self, sender_input, batch_idx, dataloader_idx):
+        return self.validation_step(sender_input, batch_idx, dataloader_idx)
+
+    def test_epoch_end(self, test_step_outputs):
+        # Generalization:
+        accs = torch.cat([acc for acc, _ in test_step_outputs[0]])
+        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in test_step_outputs[0]])
+        test_acc = accs.mean().item()
+        test_acc_no_noise = accs_no_noise.mean().item()
+        self.log("test_acc", test_acc, add_dataloader_idx=False)
+        self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
+
+        # Language analysis (on train set data)
+        language_analysis_results = test_step_outputs[1]
+        train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
+        self.log("train_acc_no_noise", train_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
+
+        meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
+        messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
+        self.analyze_language(messages, meanings, True, True)
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning
-        metrics = ["best_test_acc_no_noise", "topsim", "posdis", "bosdis"]
+        metrics = ["best_val_acc_no_noise", "topsim_at_best_val_acc", "posdis_at_best_val_acc",
+                   "bosdis_at_best_val_acc", "test_acc_no_noise"]
         self.logger.log_hyperparams(self.hparams, {m: 0 for m in metrics})

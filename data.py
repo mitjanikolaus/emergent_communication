@@ -20,21 +20,30 @@ class SignalingGameDataModule(pl.LightningDataModule):
 
         objects = generate_objects(num_features, num_values, max_num_objects)
         objects_train, objects_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
+        objects_train, objects_val = train_test_split(objects_train, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
         print(f"Num objects in train: ", len(objects_train))
+        print(f"Num objects in val: ", len(objects_val))
         print(f"Num objects in test: ", len(objects_test))
 
         self.train_dataset = SignalingGameDataset(objects_train)
+        self.val_dataset = SignalingGameDataset(objects_val)
         self.test_dataset = SignalingGameDataset(objects_test)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
 
     def val_dataloader(self):
-        generalization_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size,
+        validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
                                                num_workers=self.num_workers)
         language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
                                                   num_workers=self.num_workers)
-        return generalization_dataloader, language_analysis_dataloader
+        return validation_dataloader, language_analysis_dataloader
+
+    def test_dataloader(self):
+        test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+        language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
+                                                  num_workers=self.num_workers)
+        return test_dataloader, language_analysis_dataloader
 
 
 def generate_objects(num_features, num_values, max_num_objects):

@@ -9,8 +9,8 @@ from model import SignalingGameModule
 def run(config):
     seed_everything(config.seed, workers=True)
 
-    checkpoint_callback = ModelCheckpoint(monitor="test_acc_no_noise", mode="max", save_last=True)
-    early_stop_callback = EarlyStopping(monitor="test_acc_no_noise", patience=50, verbose=True, mode="max")
+    checkpoint_callback = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True)
+    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=50, verbose=True, mode="max")
 
     datamodule = SignalingGameDataModule(num_features=config.num_features,
                                          num_values=config.num_values,
@@ -29,11 +29,10 @@ def run(config):
 
     trainer = Trainer.from_argparse_args(config, callbacks=[checkpoint_callback, early_stop_callback])
 
-    # Initial validation
-    # trainer.validate(model, datamodule=datamodule, verbose=False)
-
     # Training
     trainer.fit(model, datamodule)
+
+    trainer.test(ckpt_path="best", datamodule=datamodule)
 
 
 def get_args():
