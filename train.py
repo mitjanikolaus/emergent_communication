@@ -9,7 +9,7 @@ from model import SignalingGameModule
 def run(config):
     seed_everything(config.seed, workers=True)
 
-    checkpoint_callback = ModelCheckpoint(monitor="test_acc", mode="max", save_last=True)
+    checkpoint_callback = ModelCheckpoint(monitor="test_acc_no_noise", mode="max", save_last=True)
 
     datamodule = SignalingGameDataModule(num_features=config.num_features,
                                          num_values=config.num_values,

@@ -492,6 +492,8 @@ class SignalingGameModule(pl.LightningModule):
         self.token_noise = self.params["vocab_size"]
         self.automatic_optimization = False
 
+        self.best_test_acc_no_noise = 0
+
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("model")
@@ -848,8 +850,14 @@ class SignalingGameModule(pl.LightningModule):
         accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[0]])
         test_acc = accs.mean().item()
         test_acc_no_noise = accs_no_noise.mean().item()
-        self.log("test_acc", test_acc, prog_bar=True, add_dataloader_idx=False)
-        self.log("test_acc_no_noise", test_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
+        self.log("test_acc", test_acc, add_dataloader_idx=False)
+        self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
+        is_best_checkpoint = False
+        if self.best_test_acc_no_noise < test_acc_no_noise:
+            self.best_test_acc_no_noise = test_acc_no_noise
+            is_best_checkpoint = True
+        self.log("best_test_acc_no_noise", self.best_test_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
+
         print("test_acc: ", test_acc)
         print("test_acc_no_noise: ", test_acc_no_noise)
 
@@ -860,9 +868,9 @@ class SignalingGameModule(pl.LightningModule):
 
         meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
-        self.analyze_language(messages, meanings)
+        self.analyze_language(messages, meanings, is_best_checkpoint)
 
-    def analyze_language(self, messages, meanings):
+    def analyze_language(self, messages, meanings, is_best_checkpoint):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
@@ -878,24 +886,31 @@ class SignalingGameModule(pl.LightningModule):
             entropy = compute_entropy(messages.numpy())
             self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
+            if is_best_checkpoint:
+                self.log("message_entropy_at_best_test_acc", entropy)
 
         if self.params.log_topsim_on_validation:
             topsim = compute_topsim(meanings, messages)
             self.log("topsim", topsim, prog_bar=True)
             print("Topsim: ", topsim)
+            if is_best_checkpoint:
+                self.log("topsim_at_best_test_acc", topsim)
 
         if self.params.log_posdis_on_validation:
             posdis = compute_posdis(self.num_features, self.num_values, meanings, messages)
             self.log("posdis", posdis, prog_bar=True)
             print("posdis: ", posdis)
+            if is_best_checkpoint:
+                self.log("posdis_at_best_test_acc", posdis)
 
         if self.params.log_bosdis_on_validation:
             bosdis = compute_bosdis(meanings, messages, self.params["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)
+            if is_best_checkpoint:
+                self.log("bosdis_at_best_test_acc", bosdis)
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning
-        metrics = ["test_acc"]
-        metrics.append("topsim")
+        metrics = ["best_test_acc_no_noise", "topsim", "posdis", "bosdis"]
         self.logger.log_hyperparams(self.hparams, {m: 0 for m in metrics})
