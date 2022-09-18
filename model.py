@@ -738,7 +738,7 @@ class SignalingGameModule(pl.LightningModule):
             receiver_hidden_states[i >= messages_sender_lengths, i] = 0
         effective_entropy_s_1 = effective_entropy_s_1 / messages_sender_lengths.float()
 
-        entropy_loss = effective_entropy_s_1.mean() * self.sender_entropy_coeff
+        entropy_loss = effective_entropy_s_1 * self.sender_entropy_coeff
 
         baseline = self.baselines["length_sender_1"].predict(messages_sender_lengths.device)
         policy_length_loss = (messages_sender_lengths.float() - baseline) * self.length_cost * effective_log_prob_s
@@ -768,8 +768,8 @@ class SignalingGameModule(pl.LightningModule):
                 effective_log_prob_r += receiver_logits[:, i] * not_eosed
             effective_entropy_r = effective_entropy_r / messages_receiver_lengths.float()
 
-            entropy_loss = (effective_entropy_s_1.mean() * self.sender_entropy_coeff
-                                + effective_entropy_r.mean() * self.receiver_entropy_coeff)
+            entropy_loss = (effective_entropy_s_1 * self.sender_entropy_coeff
+                                + effective_entropy_r * self.receiver_entropy_coeff)
 
             baseline = self.baselines["length_receiver_1"].predict(messages_receiver_lengths.device)
             policy_length_loss += (messages_receiver_lengths.float() - baseline) * self.length_cost * effective_log_prob_r
@@ -779,14 +779,15 @@ class SignalingGameModule(pl.LightningModule):
         loss_baseline = self.baselines["loss"].predict(receiver_loss.device)
         policy_loss = (
             (receiver_loss.detach() - loss_baseline) * effective_log_prob_s
-        ).mean()
-
-        policy_length_loss = policy_length_loss.mean()
+        )
 
         self.log(f"policy_loss", policy_loss.mean())
         self.log(f"policy_length_loss", policy_length_loss.mean())
 
         optimized_loss = policy_length_loss + policy_loss - entropy_loss
+
+        # average over items in batch
+        optimized_loss = optimized_loss.mean()
 
         # add the differentiable loss terms
         optimized_loss += receiver_loss.mean()
