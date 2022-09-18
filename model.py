@@ -759,8 +759,6 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"receiver_loss", receiver_loss.mean())
         assert len(receiver_loss) == batch_size
 
-
-
         if self.params.clarification_requests:
             effective_entropy_r = torch.zeros(batch_size).type_as(sender_input)
             effective_log_prob_r = torch.zeros(batch_size).type_as(sender_input)
