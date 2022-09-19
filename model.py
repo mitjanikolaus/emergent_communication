@@ -306,15 +306,6 @@ class OptimalSender(pl.LightningModule):
 
         return torch.stack(values).T
 
-    def create_messages(self, intents):
-        message_contents = self.one_hot_to_message(objects)
-
-        messages = torch.cat((speech_act_codes, message_contents), dim=1)
-
-        # Add 1 to avoid zeros, these are reserved as EOS token
-        messages = messages + 1
-        return messages
-
     def forward(self, x):
         batch_size = x.shape[0]
 
