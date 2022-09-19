@@ -78,11 +78,11 @@ def compute_topsim(
     return topsim
 
 
-def compute_posdis(n_features, n_values, meanings, messages):
+def compute_posdis(n_attributes, n_values, meanings, messages):
     batch_size = meanings.shape[0]
-    features = meanings.view(batch_size, n_features, n_values).argmax(dim=-1)
+    attributes = meanings.view(batch_size, n_attributes, n_values).argmax(dim=-1)
 
-    return information_gap_representation(features, messages)
+    return information_gap_representation(attributes, messages)
 
 
 def histogram(messages, vocab_size):

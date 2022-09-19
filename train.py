@@ -12,7 +12,7 @@ def run(config):
     checkpoint_callback = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True)
     early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=50, verbose=True, mode="max")
 
-    datamodule = SignalingGameDataModule(num_features=config.num_features,
+    datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
                                          num_values=config.num_values,
                                          max_num_objects=config.max_num_objects,
                                          test_set_size=config.test_set_size,

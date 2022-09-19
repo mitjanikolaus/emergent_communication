@@ -49,7 +49,7 @@ class LayerNormLSTMCell(jit.ScriptModule):
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, max_len, n_features, n_values, layer_norm, num_layers, open_cr
+            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, layer_norm, num_layers, open_cr
     ):
         super(Receiver, self).__init__()
 
@@ -82,7 +82,7 @@ class Receiver(nn.Module):
         else:
             self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
-        self.linear_out = nn.Linear(hidden_size, n_features * n_values)
+        self.linear_out = nn.Linear(hidden_size, n_attributes * n_values)
 
         self.pre_attn = nn.Linear(hidden_size, hidden_size)
         self.attn = nn.Linear(hidden_size, max_len)
@@ -130,7 +130,7 @@ class Receiver(nn.Module):
 
 class ReceiverMLP(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, n_features, n_values, max_message_len
+            self, vocab_size, embed_dim, n_attributes, n_values, max_message_len
     ):
         super(ReceiverMLP, self).__init__()
 
@@ -140,7 +140,7 @@ class ReceiverMLP(nn.Module):
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.linear_message = nn.Linear(embed_dim * (max_message_len + 1), embed_dim)
 
-        self.linear_out = nn.Linear(embed_dim, n_features*n_values)
+        self.linear_out = nn.Linear(embed_dim, n_attributes*n_values)
 
     def forward(self, batch):
         message, input, message_lengths = batch
@@ -159,7 +159,7 @@ class ReceiverMLP(nn.Module):
 class Sender(pl.LightningModule):
     def __init__(
         self,
-        n_features,
+        n_attributes,
         n_values,
         vocab_size,
         embed_dim,
@@ -176,9 +176,9 @@ class Sender(pl.LightningModule):
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
-        self.embed_input = nn.Linear(n_features*n_values, hidden_size)
+        self.embed_input = nn.Linear(n_attributes*n_values, hidden_size)
 
-        self.linear_in_perc = nn.Linear(n_features * n_values, hidden_size)
+        self.linear_in_perc = nn.Linear(n_attributes * n_values, hidden_size)
         self.linear_in_prod = nn.Linear(hidden_size * 2, hidden_size)
 
         self.clarification_requests = clarification_requests
@@ -270,7 +270,7 @@ class OptimalSender(pl.LightningModule):
     # TODO: update for multiple turns
     def __init__(
         self,
-        n_features,
+        n_attributes,
         n_values,
         vocab_size,
         max_len,
@@ -279,17 +279,17 @@ class OptimalSender(pl.LightningModule):
 
         self.max_len = max_len
 
-        self.n_features = n_features
+        self.n_attributes = n_attributes
         self.n_values = n_values
 
         self.vocab_size = vocab_size
 
         assert n_values + 2 <= vocab_size   # +1 for case if value is not set and + 1 for EOS token
-        assert n_features + 1 <= max_len    # + 1 to encode speech act
+        assert n_attributes + 1 <= max_len    # + 1 to encode speech act
 
     def one_hot_to_message(self, intent_objects):
         values = []
-        for i in range(self.n_features):
+        for i in range(self.n_attributes):
             # Cut out relevant range for this feature
             relevant_range = intent_objects[:, i * self.n_values:(i + 1) * self.n_values]
             # Prepend zeros for case if feature is not set
@@ -329,7 +329,7 @@ class SenderReceiver(pl.LightningModule):
     def __init__(
         self,
         speech_acts,
-        n_features,
+        n_attributes,
         n_values,
         vocab_size,
         embed_dim,
@@ -346,7 +346,7 @@ class SenderReceiver(pl.LightningModule):
 
         self.max_len = max_len
         self.speech_acts = speech_acts
-        self.embed_input = nn.Linear(n_features*n_values, embed_dim)
+        self.embed_input = nn.Linear(n_attributes*n_values, embed_dim)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
         self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
@@ -454,7 +454,7 @@ class SenderReceiver(pl.LightningModule):
 
 class SignalingGameModule(pl.LightningModule):
     def __init__(self, symmetric=False, optimal_sender=False, load_checkpoint=None, baseline_type="mean",
-                 max_len=4, length_cost=0, num_features=4, num_values=4, num_senders=1, num_receivers=1,
+                 max_len=4, length_cost=0, num_attributes=4, num_values=4, num_senders=1, num_receivers=1,
                  receiver_embed_dim=30, receiver_num_layers=500, receiver_hidden_dim=500,
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
@@ -468,7 +468,7 @@ class SignalingGameModule(pl.LightningModule):
 
         self.init_agents()
 
-        self.num_features = self.params.num_features
+        self.num_attributes = self.params.num_attributes
         self.num_values = self.params.num_values
 
         self.sender_entropy_coeff = self.params.sender_entropy_coeff
@@ -502,7 +502,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--load-checkpoint", type=str, default=None)
         parser.add_argument("--baseline-type", type=str, default="mean")
 
-        parser.add_argument("--num-features", type=int, default=4)
+        parser.add_argument("--num-attributes", type=int, default=4)
         parser.add_argument("--num-values", type=int, default=4)
         parser.add_argument("--num-senders", type=int, default=1)
         parser.add_argument("--num-receivers", type=int, default=1)
@@ -541,7 +541,7 @@ class SignalingGameModule(pl.LightningModule):
                 raise ValueError("Symmetric game requires same number of senders and receivers.")
             self.senders = ModuleList(
                 [
-                    SenderReceiver(self.params.num_features, self.params.num_values,
+                    SenderReceiver(self.params.num_attributes, self.params.num_values,
                                    self.params.vocab_size, self.params.sender_embed_dim,
                                    self.params.sender_hidden_dim, self.params.max_len,
                                    self.params.sender_layer_norm, self.params.receiver_layer_norm,
@@ -555,7 +555,7 @@ class SignalingGameModule(pl.LightningModule):
                 self.senders = ModuleList(
                     [
                         OptimalSender(
-                               self.params.num_features, self.params.num_values,
+                               self.params.num_attributes, self.params.num_values,
                                self.params.vocab_size, self.params.max_len)
                         for _ in range(self.params.num_senders)
                     ]
@@ -564,7 +564,7 @@ class SignalingGameModule(pl.LightningModule):
                 self.senders = ModuleList(
                     [
                         Sender(
-                               self.params.num_features, self.params.num_values,
+                               self.params.num_attributes, self.params.num_values,
                                self.params.vocab_size, self.params.sender_embed_dim,
                                self.params.sender_hidden_dim, self.params.max_len,
                                self.params.sender_layer_norm, self.params.sender_num_layers,
@@ -576,7 +576,7 @@ class SignalingGameModule(pl.LightningModule):
                 [
                     Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
                              self.params.receiver_hidden_dim, self.params.max_len,
-                             self.params.num_features, self.params.num_values,
+                             self.params.num_attributes, self.params.num_values,
                              self.params.receiver_layer_norm, self.params.receiver_num_layers,
                              self.params.open_cr)
                     for _ in range(self.params.num_receivers)
@@ -587,7 +587,7 @@ class SignalingGameModule(pl.LightningModule):
         self.receivers = ModuleList(
             [
                 ReceiverMLP(self.params.vocab_size, self.params.receiver_embed_dim,
-                            self.params.num_features, self.params.num_values,
+                            self.params.num_attributes, self.params.num_values,
                             self.params.max_len)
                 for _ in range(self.params.num_receivers)
             ]
@@ -738,16 +738,16 @@ class SignalingGameModule(pl.LightningModule):
 
         receiver_output = receiver.forward_output(receiver_hidden_states, messages_sender_lengths)
 
-        receiver_output = receiver_output.view(batch_size, self.num_features, self.num_values)
+        receiver_output = receiver_output.view(batch_size, self.num_attributes, self.num_values)
 
-        sender_input = sender_input.view(batch_size, self.num_features, self.num_values)
+        sender_input = sender_input.view(batch_size, self.num_attributes, self.num_values)
 
-        acc = (torch.sum((receiver_output.argmax(dim=-1) == sender_input.argmax(dim=-1)).detach(), dim=1) == self.num_features).float()
+        acc = (torch.sum((receiver_output.argmax(dim=-1) == sender_input.argmax(dim=-1)).detach(), dim=1) == self.num_attributes).float()
 
-        receiver_output = receiver_output.view(batch_size * self.num_features, self.num_values)
+        receiver_output = receiver_output.view(batch_size * self.num_attributes, self.num_values)
 
-        labels = sender_input.argmax(dim=-1).view(batch_size * self.num_features)
-        receiver_loss = F.cross_entropy(receiver_output, labels, reduction="none").view(batch_size, self.num_features).mean(dim=-1)
+        labels = sender_input.argmax(dim=-1).view(batch_size * self.num_attributes)
+        receiver_loss = F.cross_entropy(receiver_output, labels, reduction="none").view(batch_size, self.num_attributes).mean(dim=-1)
 
         self.log(f"receiver_loss", receiver_loss.mean())
         assert len(receiver_loss) == batch_size
@@ -888,7 +888,7 @@ class SignalingGameModule(pl.LightningModule):
                 self.log("topsim_at_best_val_acc", topsim)
 
         if self.params.log_posdis_on_validation or is_test:
-            posdis = compute_posdis(self.num_features, self.num_values, meanings, messages)
+            posdis = compute_posdis(self.num_attributes, self.num_values, meanings, messages)
             self.log("posdis", posdis, prog_bar=True)
             print("posdis: ", posdis)
             if is_best_checkpoint:

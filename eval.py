@@ -25,7 +25,7 @@ def run(args):
     model.params.log_bosdis_on_validation = True
     model.params.log_entropy_on_validation = True
 
-    datamodule = SignalingGameDataModule(num_features=config["model"]["num_features"],
+    datamodule = SignalingGameDataModule(num_attributes=config["model"]["num_attributes"],
                                          num_values=config["model"]["num_values"],
                                          max_num_objects=config["data"]["max_num_objects"],
                                          test_set_size=config["data"]["test_set_size"],

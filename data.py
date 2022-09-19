@@ -10,15 +10,15 @@ RANDOM_STATE_TRAIN_TEST_SPLIT = 1
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, num_features, num_values, max_num_objects, test_set_size, batch_size, num_workers):
+    def __init__(self, num_attributes, num_values, max_num_objects, test_set_size, batch_size, num_workers):
         super().__init__()
-        self.num_features = num_features
+        self.num_attributes = num_attributes
         self.num_values = num_values
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.max_num_objects = max_num_objects
 
-        objects = generate_objects(num_features, num_values, max_num_objects)
+        objects = generate_objects(num_attributes, num_values, max_num_objects)
         objects_train, objects_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
         objects_train, objects_val = train_test_split(objects_train, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
         print(f"Num objects in train: ", len(objects_train))
@@ -46,19 +46,19 @@ class SignalingGameDataModule(pl.LightningDataModule):
         return test_dataloader, language_analysis_dataloader
 
 
-def generate_objects(num_features, num_values, max_num_objects):
+def generate_objects(num_attributes, num_values, max_num_objects):
     samples = set()
-    if num_values**num_features < max_num_objects:
-        inputs = itertools.product(range(num_values), repeat=num_features)
+    if num_values**num_attributes < max_num_objects:
+        inputs = itertools.product(range(num_values), repeat=num_attributes)
         for input in inputs:
-            z = torch.zeros((num_features, num_values))
-            for i in range(num_features):
+            z = torch.zeros((num_attributes, num_values))
+            for i in range(num_attributes):
                 z[i, input[i]] = 1
             samples.add(z.view(-1))
     else:
         while len(samples) < max_num_objects:
-            z = torch.zeros((num_features, num_values))
-            for i in range(num_features):
+            z = torch.zeros((num_attributes, num_values))
+            for i in range(num_attributes):
                 value = random.choice(range(num_values))
                 z[i, value] = 1
             samples.add(z.view(-1))

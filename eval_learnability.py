@@ -5,7 +5,7 @@ import torch.cuda
 import pytorch_lightning as pl
 from pytorch_lightning import seed_everything
 
-from data import SignalingGameDataModule, REQUEST
+from data import SignalingGameDataModule
 from model import SignalingGameModule
 
 
@@ -24,17 +24,14 @@ def run(args):
 
     # model.model_hparams['receiver_aux_loss'] = False
 
-    speech_acts_used = [REQUEST]
-
     datamodule = SignalingGameDataModule(speech_acts=config["model"]["speech_acts"],
-                                         num_features=config["model"]["num_features"],
+                                         num_attributes=config["model"]["num_attributes"],
                                          num_values=config["model"]["num_values"],
                                          num_objects=config["data"]["num_objects"],
                                          max_num_objects=config["data"]["max_num_objects"],
                                          test_set_size=config["data"]["test_set_size"],
                                          batch_size=config["data"]["batch_size"],
-                                         num_workers=config["data"]["num_workers"],
-                                         speech_acts_used=speech_acts_used)
+                                         num_workers=config["data"]["num_workers"])
 
     # Reset receivers
     if args.mlp_receivers:
