@@ -85,7 +85,7 @@ class Receiver(nn.Module):
         self.linear_out = nn.Linear(hidden_size, n_attributes * n_values)
 
         self.pre_attn = nn.Linear(hidden_size, hidden_size)
-        self.attn = nn.Linear(hidden_size, max_len)
+        self.attn = nn.Linear(hidden_size, max_len * n_attributes * n_values)
 
     def forward_first_turn(self, messages):
         batch_size = messages.shape[0]
@@ -116,16 +116,21 @@ class Receiver(nn.Module):
 
         return output_token, entropy, logits, prev_hidden
 
-    def forward_output(self, hidden_states, message_lengths):
-        hidden_states_transformed = self.pre_attn(hidden_states)
-        hidden_states_summed = torch.sum(hidden_states_transformed, dim=1)
+    def forward_output(self, hidden_states):
+        batch_size = hidden_states.shape[0]
 
-        attn_weights = F.softmax(self.attn(hidden_states_summed), dim=1)
-        weighted_hidden_states = torch.sum(hidden_states * attn_weights.unsqueeze(2), dim=1)
+        out = self.linear_out(hidden_states)
 
-        out = self.linear_out(weighted_hidden_states)
+        # Set hidden states with padding NaN so that they're not considered in the mean calculation
+        hidden_states_nan = hidden_states.clone()
+        hidden_states_nan[hidden_states_nan == 0] = torch.nan
 
-        return out
+        hidden_states_summary = torch.nanmean(hidden_states_nan, dim=1)
+        attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
+
+        weighted_out = torch.sum(out * attn_weights, dim=1)
+
+        return weighted_out
 
 
 class ReceiverMLP(nn.Module):
@@ -492,7 +497,7 @@ class SignalingGameModule(pl.LightningModule):
         self.token_noise = self.params["vocab_size"]
         self.automatic_optimization = False
 
-        self.best_val_acc_no_noise = 0
+        self.best_val_acc_no_noise = 0.0
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -736,7 +741,7 @@ class SignalingGameModule(pl.LightningModule):
         baseline = self.baselines["length_sender_1"].predict(messages_sender_lengths.device)
         policy_length_loss = (messages_sender_lengths.float() - baseline) * self.length_cost * effective_log_prob_s
 
-        receiver_output = receiver.forward_output(receiver_hidden_states, messages_sender_lengths)
+        receiver_output = receiver.forward_output(receiver_hidden_states)
 
         receiver_output = receiver_output.view(batch_size, self.num_attributes, self.num_values)
 
@@ -856,6 +861,8 @@ class SignalingGameModule(pl.LightningModule):
         language_analysis_results = validation_step_outputs[1]
         train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
         self.log("train_acc_no_noise", train_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
+        if is_best_checkpoint:
+            self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
 
         meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
@@ -915,9 +922,6 @@ class SignalingGameModule(pl.LightningModule):
 
         # Language analysis (on train set data)
         language_analysis_results = test_step_outputs[1]
-        train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
-        self.log("train_acc_no_noise", train_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
-
         meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
         self.analyze_language(messages, meanings, True, True)
