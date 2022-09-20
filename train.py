@@ -10,7 +10,7 @@ def run(config):
     seed_everything(config.seed, workers=True)
 
     checkpoint_callback = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True)
-    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=50, verbose=True, mode="max")
+    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=25, verbose=True, mode="max")
 
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
                                          num_values=config.num_values,
