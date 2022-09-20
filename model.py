@@ -799,7 +799,7 @@ class SignalingGameModule(pl.LightningModule):
             messages[(indices == 1) & (messages != 0)] = self.token_noise
         return messages
 
-    def on_validation_epoch_start(self):
+    def on_validation_epoch_start(self, is_test=False):
         # Sample agent indices for this validation epoch
         if self.params.symmetric:
             num_agents = self.params.num_senders + self.params.num_receivers
@@ -812,7 +812,11 @@ class SignalingGameModule(pl.LightningModule):
         else:
             self.val_epoch_sender_idx = random.choice(range(self.params.num_senders))
             self.val_epoch_receiver_idx = random.choice(range(self.params.num_receivers))
-        print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
+
+        if is_test:
+            print(f"\nTesting for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
+        else:
+            print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
 
     def validation_step(self, sender_input, batch_idx, dataloader_idx):
         sender_idx = self.val_epoch_sender_idx
@@ -898,6 +902,9 @@ class SignalingGameModule(pl.LightningModule):
             print("bodis: ", bosdis)
             if is_best_checkpoint:
                 self.log("bosdis_at_best_val_acc", bosdis)
+
+    def on_test_epoch_start(self):
+        self.on_validation_epoch_start(is_test=True)
 
     def test_step(self, sender_input, batch_idx, dataloader_idx):
         return self.validation_step(sender_input, batch_idx, dataloader_idx)
