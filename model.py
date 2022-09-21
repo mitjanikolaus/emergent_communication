@@ -799,7 +799,7 @@ class SignalingGameModule(pl.LightningModule):
             messages[(indices == 1) & (messages != 0)] = self.token_noise
         return messages
 
-    def on_validation_epoch_start(self, is_test=False):
+    def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
         if self.params.symmetric:
             num_agents = self.params.num_senders + self.params.num_receivers
@@ -813,22 +813,26 @@ class SignalingGameModule(pl.LightningModule):
             self.val_epoch_sender_idx = random.choice(range(self.params.num_senders))
             self.val_epoch_receiver_idx = random.choice(range(self.params.num_receivers))
 
-        if is_test:
-            print(f"\nTesting for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
-        else:
-            print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:\n")
+        print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:")
 
     def validation_step(self, sender_input, batch_idx, dataloader_idx):
         sender_idx = self.val_epoch_sender_idx
         receiver_idx = self.val_epoch_receiver_idx
         if dataloader_idx == 0:
-            # Generalization
+            # Val Generalization
             _, acc = self.forward(sender_input, sender_idx, receiver_idx)
             _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
 
             return acc, acc_no_noise
 
         elif dataloader_idx == 1:
+            # Test Generalization
+            _, acc = self.forward(sender_input, sender_idx, receiver_idx)
+            _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
+
+            return acc, acc_no_noise
+
+        elif dataloader_idx == 2:
             # Language analysis (on train set data)
             # TODO: do only if required for logging
             _, acc_no_noise, messages = self.forward(sender_input, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
@@ -836,7 +840,7 @@ class SignalingGameModule(pl.LightningModule):
             return sender_input, messages, acc_no_noise
 
     def validation_epoch_end(self, validation_step_outputs):
-        # Generalization:
+        # Val Generalization:
         accs = torch.cat([acc for acc, _ in validation_step_outputs[0]])
         accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[0]])
         val_acc = accs.mean().item()
@@ -852,8 +856,16 @@ class SignalingGameModule(pl.LightningModule):
         print("val_acc: ", val_acc)
         print("val_acc_no_noise: ", val_acc_no_noise)
 
+        # Test Generalization:
+        accs = torch.cat([acc for acc, _ in validation_step_outputs[1]])
+        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[1]])
+        test_acc = accs.mean().item()
+        test_acc_no_noise = accs_no_noise.mean().item()
+        self.log("test_acc", test_acc, add_dataloader_idx=False)
+        self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
+
         # Language analysis (on train set data)
-        language_analysis_results = validation_step_outputs[1]
+        language_analysis_results = validation_step_outputs[2]
         train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
         self.log("train_acc_no_noise", train_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
         if is_best_checkpoint:
@@ -863,66 +875,46 @@ class SignalingGameModule(pl.LightningModule):
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
         self.analyze_language(messages, meanings, is_best_checkpoint)
 
-    def analyze_language(self, messages, meanings, is_best_checkpoint=False, is_test=False):
+    def analyze_language(self, messages, meanings, is_best_checkpoint=False):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
-        meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+        # TODO: command line arg:
+        if is_best_checkpoint:
+            meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+            num_digits = int(math.log10(self.params.vocab_size))
+            messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
+            messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
+            messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
+            messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
-        num_digits = int(math.log10(self.params.vocab_size))
-        messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
-        messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
-        messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
-        messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
-
-        if self.params.log_entropy_on_validation or is_test:
+        if self.params.log_entropy_on_validation or is_best_checkpoint:
             entropy = compute_entropy(messages.numpy())
             self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
             if is_best_checkpoint:
                 self.log("message_entropy_at_best_val_acc", entropy)
 
-        if self.params.log_topsim_on_validation or is_test:
+        if self.params.log_topsim_on_validation or is_best_checkpoint:
             topsim = compute_topsim(meanings, messages)
             self.log("topsim", topsim, prog_bar=True)
             print("Topsim: ", topsim)
             if is_best_checkpoint:
                 self.log("topsim_at_best_val_acc", topsim)
 
-        if self.params.log_posdis_on_validation or is_test:
+        if self.params.log_posdis_on_validation or is_best_checkpoint:
             posdis = compute_posdis(self.num_attributes, self.num_values, meanings, messages)
             self.log("posdis", posdis, prog_bar=True)
             print("posdis: ", posdis)
             if is_best_checkpoint:
                 self.log("posdis_at_best_val_acc", posdis)
 
-        if self.params.log_bosdis_on_validation or is_test:
+        if self.params.log_bosdis_on_validation or is_best_checkpoint:
             bosdis = compute_bosdis(meanings, messages, self.params["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)
             if is_best_checkpoint:
                 self.log("bosdis_at_best_val_acc", bosdis)
-
-    def on_test_epoch_start(self):
-        self.on_validation_epoch_start(is_test=True)
-
-    def test_step(self, sender_input, batch_idx, dataloader_idx):
-        return self.validation_step(sender_input, batch_idx, dataloader_idx)
-
-    def test_epoch_end(self, test_step_outputs):
-        # Generalization:
-        accs = torch.cat([acc for acc, _ in test_step_outputs[0]])
-        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in test_step_outputs[0]])
-        test_acc = accs.mean().item()
-        test_acc_no_noise = accs_no_noise.mean().item()
-        self.log("test_acc", test_acc, add_dataloader_idx=False)
-        self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
-
-        # Language analysis (on train set data)
-        language_analysis_results = test_step_outputs[1]
-        meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
-        messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
-        self.analyze_language(messages, meanings, True, True)
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning

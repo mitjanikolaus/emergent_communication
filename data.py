@@ -35,15 +35,10 @@ class SignalingGameDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
                                                num_workers=self.num_workers)
-        language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
-                                                  num_workers=self.num_workers)
-        return validation_dataloader, language_analysis_dataloader
-
-    def test_dataloader(self):
         test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
                                                   num_workers=self.num_workers)
-        return test_dataloader, language_analysis_dataloader
+        return validation_dataloader, test_dataloader, language_analysis_dataloader
 
 
 def generate_objects(num_attributes, num_values, max_num_objects):

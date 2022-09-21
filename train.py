@@ -33,8 +33,6 @@ def run(config):
     # Training
     trainer.fit(model, datamodule)
 
-    trainer.test(ckpt_path="best", datamodule=datamodule)
-
 
 def get_args():
     parser = argparse.ArgumentParser()
