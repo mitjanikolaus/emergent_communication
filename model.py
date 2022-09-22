@@ -12,6 +12,7 @@ import pytorch_lightning as pl
 from torch.nn import ModuleList, Parameter, GRUCell
 
 import pandas as pd
+from torch.nn.utils.rnn import pack_padded_sequence
 
 from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
 from utils import MeanBaseline, find_lengths, NoBaseline
@@ -76,6 +77,8 @@ class Receiver(nn.Module):
             ]
         )
 
+        self.rnn_out = nn.GRU(input_size=embed_dim, hidden_size=hidden_size, batch_first=True)
+
         if open_cr:
             # Open clarification request: receiver can only answer with binary feedback signal
             self.hidden_to_output = nn.Linear(hidden_size, 2)
@@ -116,21 +119,16 @@ class Receiver(nn.Module):
 
         return output_token, entropy, logits, prev_hidden
 
-    def forward_output(self, hidden_states):
-        batch_size = hidden_states.shape[0]
+    def forward_output(self, messages_sender, message_lengths):
+        embedded = self.embedding_perc(messages_sender)
 
-        out = self.linear_out(hidden_states)
+        packed = pack_padded_sequence(embedded, message_lengths, batch_first=True, enforce_sorted=False)
 
-        # Set hidden states with padding NaN so that they're not considered in the mean calculation
-        hidden_states_nan = hidden_states.clone()
-        hidden_states_nan[hidden_states_nan == 0] = torch.nan
+        _, hidden = self.rnn_out(packed)
 
-        hidden_states_summary = torch.nanmean(hidden_states_nan, dim=1)
-        attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
+        out = self.linear_out(hidden[-1])
 
-        weighted_out = torch.sum(out * attn_weights, dim=1)
-
-        return weighted_out
+        return out
 
 
 class ReceiverMLP(nn.Module):
@@ -732,7 +730,7 @@ class SignalingGameModule(pl.LightningModule):
         baseline = self.baselines["length_sender_1"].predict(messages_sender_lengths.device)
         policy_length_loss = (messages_sender_lengths.float() - baseline) * self.length_cost * effective_log_prob_s
 
-        receiver_output = receiver.forward_output(receiver_hidden_states)
+        receiver_output = receiver.forward_output(messages_sender, messages_sender_lengths)
 
         receiver_output = receiver_output.view(batch_size, self.num_attributes, self.num_values)
 
