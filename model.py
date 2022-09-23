@@ -170,7 +170,7 @@ class Sender(pl.LightningModule):
         max_len,
         layer_norm,
         num_layers,
-        clarification_requests,
+        feedback,
         open_cr = False,
     ):
         super(Sender, self).__init__()
@@ -184,8 +184,8 @@ class Sender(pl.LightningModule):
         self.linear_in_perc = nn.Linear(n_attributes * n_values, hidden_size)
         self.linear_in_prod = nn.Linear(hidden_size * 2, hidden_size)
 
-        self.clarification_requests = clarification_requests
-        if self.clarification_requests:
+        self.feedback = feedback
+        if self.feedback:
             self.linear_in_response = nn.Linear(embed_dim * 2, embed_dim)
         else:
             self.linear_in_response = nn.Linear(embed_dim, embed_dim)
@@ -211,7 +211,7 @@ class Sender(pl.LightningModule):
         self.vocab_size = vocab_size
         self.num_layers = num_layers
 
-        self.clarification_requests = clarification_requests
+        self.feedback = feedback
 
         rnn_cell = GRUCell
 
@@ -239,7 +239,7 @@ class Sender(pl.LightningModule):
     def forward_subsequent_turn(self, output_last_turn, prev_hidden, input_response):
         embedded_output_last_turn = self.embedding_prod(output_last_turn)
 
-        if self.clarification_requests:
+        if self.feedback:
             embedded_input = self.embedding_response(input_response)
             inputs = torch.cat((embedded_input, embedded_output_last_turn), dim=1)
         else:
@@ -453,7 +453,7 @@ class SignalingGameModule(pl.LightningModule):
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
                  sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
-                 vocab_size=5, noise=0, clarification_requests=False, open_cr=False,
+                 vocab_size=5, noise=0, feedback=False, open_cr=False,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False, **kwargs):
         super().__init__()
@@ -505,7 +505,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
 
         parser.add_argument("--noise", type=float, default=0)
-        parser.add_argument("--clarification-requests", default=False, action="store_true")
+        parser.add_argument("--feedback", default=False, action="store_true")
         parser.add_argument("--open-cr", default=False, action="store_true")
 
         parser.add_argument("--log-topsim-on-validation", default=False, action="store_true")
@@ -562,7 +562,7 @@ class SignalingGameModule(pl.LightningModule):
                                self.params.vocab_size, self.params.sender_embed_dim,
                                self.params.sender_hidden_dim, self.params.max_len,
                                self.params.sender_layer_norm, self.params.sender_num_layers,
-                               self.params.clarification_requests, self.params.open_cr)
+                               self.params.feedback, self.params.open_cr)
                         for _ in range(self.params.num_senders)
                     ]
                 )
@@ -678,16 +678,17 @@ class SignalingGameModule(pl.LightningModule):
         sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
         messages_sender.append(sender_output_tokens_detached)
 
-        receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(sender_output_tokens)
-        receiver_entropies.append(receiver_step_entropy)
-        receiver_logits.append(receiver_step_logits)
-        receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
+        if self.params.feedback:
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(sender_output_tokens)
+            receiver_entropies.append(receiver_step_entropy)
+            receiver_logits.append(receiver_step_logits)
+            receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
+            input_cr = receiver_output_tokens.detach()
+        else:
+            input_cr = None
 
         for step in range(1, self.params.max_len):
-            if self.params.clarification_requests:
-                input_cr = receiver_output_tokens.detach()
-            else:
-                input_cr = None
+
             sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_cr)
 
             sender_entropies.append(sender_step_entropy)
@@ -698,11 +699,14 @@ class SignalingGameModule(pl.LightningModule):
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
             messages_sender.append(sender_output_tokens_detached)
 
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward(sender_output_tokens_detached, receiver_prev_hidden)
-            receiver_entropies.append(receiver_step_entropy)
-            receiver_logits.append(receiver_step_logits)
-            receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
-            messages_receiver.append(receiver_output_tokens)
+            if self.params.feedback:
+                receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward(sender_output_tokens_detached, receiver_prev_hidden)
+                receiver_entropies.append(receiver_step_entropy)
+                receiver_logits.append(receiver_step_logits)
+                receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
+                messages_receiver.append(receiver_output_tokens)
+
+                input_cr = receiver_output_tokens.detach()
 
         messages_sender = torch.stack(messages_sender).permute(1, 0)
         sender_logits = torch.stack(sender_logits).permute(1, 0)
@@ -711,12 +715,13 @@ class SignalingGameModule(pl.LightningModule):
         messages_sender_lengths = find_lengths(messages_sender)
         self.log(f"message_lengths", messages_sender_lengths.float().mean() - 1)
 
-        messages_receiver = torch.stack(messages_receiver).permute(1, 0)
-        receiver_logits = torch.stack(receiver_logits).permute(1, 0)
-        receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
+        if self.params.feedback:
+            messages_receiver = torch.stack(messages_receiver).permute(1, 0)
+            receiver_logits = torch.stack(receiver_logits).permute(1, 0)
+            receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
 
-        messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
-        self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean() - 1)
+            messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
+            self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean() - 1)
 
         for i in range(messages_sender.size(1)):
             sender_entropies[i >= messages_sender_lengths, i] = 0
@@ -746,7 +751,7 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"receiver_loss", receiver_loss.mean())
         assert len(receiver_loss) == batch_size
 
-        if self.params.clarification_requests:
+        if self.params.feedback:
             for i in range(messages_receiver.size(1)):
                 receiver_entropies[i >= messages_receiver_lengths, i] = 0
                 receiver_logits[i >= messages_receiver_lengths, i] = 0
@@ -780,7 +785,7 @@ class SignalingGameModule(pl.LightningModule):
         if self.training:
             self.baselines["loss"].update(receiver_loss)
             self.baselines["length_sender"].update(messages_sender_lengths.float())
-            if self.params.clarification_requests:
+            if self.params.feedback:
                 self.baselines["length_receiver"].update(messages_receiver_lengths.float())
 
         if return_messages:
@@ -908,7 +913,7 @@ class SignalingGameModule(pl.LightningModule):
                 self.log("posdis_at_best_val_acc", posdis)
 
         if self.params.log_bosdis_on_validation or is_best_checkpoint:
-            bosdis = compute_bosdis(meanings, messages, self.params["vocab_size"])
+            bosdis = compute_bosdis(self.num_attributes, self.num_values, meanings, messages, self.params["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)
             if is_best_checkpoint:
