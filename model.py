@@ -85,10 +85,9 @@ class Receiver(nn.Module):
         else:
             self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
-        self.linear_out = nn.Linear(hidden_size, n_attributes * n_values)
+        self.linear_out = nn.Linear(embed_dim, n_attributes * n_values)
 
-        self.pre_attn = nn.Linear(hidden_size, hidden_size)
-        self.attn = nn.Linear(hidden_size, max_len * n_attributes * n_values)
+        self.attn = nn.Linear(embed_dim, max_len * n_attributes * n_values)
 
     def forward_first_turn(self, messages):
         batch_size = messages.shape[0]
@@ -120,15 +119,17 @@ class Receiver(nn.Module):
         return output_token, entropy, logits, prev_hidden
 
     def forward_output(self, messages_sender, message_lengths):
+        batch_size = messages_sender.shape[0]
         embedded = self.embedding_perc(messages_sender)
 
-        packed = pack_padded_sequence(embedded, message_lengths, batch_first=True, enforce_sorted=False)
+        out = self.linear_out(embedded)
 
-        _, hidden = self.rnn_out(packed)
+        message_states_summary = torch.mean(embedded, dim=1)
+        attn_weights = F.softmax(self.attn(message_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
 
-        out = self.linear_out(hidden[-1])
+        weighted_out = torch.sum(out * attn_weights, dim=1)
 
-        return out
+        return weighted_out
 
 
 class ReceiverMLP(nn.Module):
@@ -722,6 +723,7 @@ class SignalingGameModule(pl.LightningModule):
             sender_entropies[i >= messages_sender_lengths, i] = 0
             sender_logits[i >= messages_sender_lengths, i] = 0
             receiver_hidden_states[i >= messages_sender_lengths, i] = 0
+            messages_sender[i >= messages_sender_lengths, i] = 0
         effective_entropy_s_1 = sender_entropies.sum(dim=1) / messages_sender_lengths.float()
         effective_log_prob_s = sender_logits.sum(dim=1)
 
