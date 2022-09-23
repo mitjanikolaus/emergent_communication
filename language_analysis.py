@@ -96,10 +96,12 @@ def histogram(messages, vocab_size):
     return histogram
 
 
-def compute_bosdis(meanings, messages, vocab_size):
+def compute_bosdis(n_attributes, n_values, meanings, messages, vocab_size):
+    batch_size = meanings.shape[0]
     histograms = histogram(messages, vocab_size)
+    attributes = meanings.view(batch_size, n_attributes, n_values).argmax(dim=-1)
 
-    return information_gap_representation(meanings, histograms[:, 1:])
+    return information_gap_representation(attributes, histograms[:, 1:])
 
 
 def information_gap_representation(meanings, representations):
