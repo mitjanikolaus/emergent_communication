@@ -12,7 +12,6 @@ import pytorch_lightning as pl
 from torch.nn import ModuleList, Parameter, GRUCell
 
 import pandas as pd
-from torch.nn.utils.rnn import pack_padded_sequence
 
 from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
 from utils import MeanBaseline, find_lengths, NoBaseline
@@ -48,6 +47,57 @@ class LayerNormLSTMCell(jit.ScriptModule):
         return hy, cy
 
 
+class LayerNormGRUCell(nn.Module):
+    def __init__(self, input_size, hidden_size, bias=True):
+        super(LayerNormGRUCell, self).__init__()
+
+        self.ln_i2h = nn.LayerNorm(2*hidden_size, elementwise_affine=False)
+        self.ln_h2h = nn.LayerNorm(2*hidden_size, elementwise_affine=False)
+        self.ln_cell_1 = nn.LayerNorm(hidden_size, elementwise_affine=False)
+        self.ln_cell_2 = nn.LayerNorm(hidden_size, elementwise_affine=False)
+
+        self.i2h = nn.Linear(input_size, 2 * hidden_size, bias=bias)
+        self.h2h = nn.Linear(hidden_size, 2 * hidden_size, bias=bias)
+        self.h_hat_W = nn.Linear(input_size, hidden_size, bias=bias)
+        self.h_hat_U = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.hidden_size = hidden_size
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        std = 1.0 / math.sqrt(self.hidden_size)
+        for w in self.parameters():
+            w.data.uniform_(-std, std)
+
+    def forward(self, x, h):
+        h = h.view(h.size(0), -1)
+        x = x.view(x.size(0), -1)
+
+        i2h = self.i2h(x)
+        h2h = self.h2h(h)
+
+        i2h = self.ln_i2h(i2h)
+        h2h = self.ln_h2h(h2h)
+
+        preact = i2h + h2h
+
+        gates = preact[:, :].sigmoid()
+        z_t = gates[:, :self.hidden_size]
+        r_t = gates[:, -self.hidden_size:]
+
+        h_hat_first_half = self.h_hat_W(x)
+        h_hat_last_half = self.h_hat_U(h)
+
+        h_hat_first_half = self.ln_cell_1(h_hat_first_half)
+        h_hat_last_half = self.ln_cell_2(h_hat_last_half)
+
+        h_hat = torch.tanh(h_hat_first_half + torch.mul(r_t, h_hat_last_half))
+
+        h_t = torch.mul(1-z_t, h ) + torch.mul(z_t, h_hat)
+
+        h_t = h_t.view(h_t.size(0), -1)
+        return h_t
+
+
 class Receiver(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, layer_norm, num_layers, open_cr
@@ -67,8 +117,12 @@ class Receiver(nn.Module):
         self.num_layers = num_layers
         self.max_len = max_len
 
-        rnn_cell = GRUCell
-        self.cells = nn.ModuleList(
+        if layer_norm:
+            rnn_cell = LayerNormGRUCell
+        else:
+            rnn_cell = GRUCell
+
+        self.feedback_cells = nn.ModuleList(
             [
                 rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
@@ -77,7 +131,14 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.rnn_out = nn.GRU(input_size=embed_dim, hidden_size=hidden_size, batch_first=True)
+        self.out_cells = nn.ModuleList(
+            [
+                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
+                if i == 0
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
+                for i in range(num_layers)
+            ]
+        )
 
         if open_cr:
             # Open clarification request: receiver can only answer with binary feedback signal
@@ -87,7 +148,6 @@ class Receiver(nn.Module):
 
         self.linear_out = nn.Linear(hidden_size, n_attributes * n_values)
 
-        self.pre_attn = nn.Linear(hidden_size, hidden_size)
         self.attn = nn.Linear(hidden_size, max_len * n_attributes * n_values)
 
     def forward_first_turn(self, messages):
@@ -101,7 +161,7 @@ class Receiver(nn.Module):
     def forward(self, messages, prev_hidden):
         rnn_input = self.embedding_perc(messages)
 
-        for i, layer in enumerate(self.cells):
+        for i, layer in enumerate(self.feedback_cells):
             h_t = layer(rnn_input, prev_hidden[i])
             prev_hidden[i] = h_t
             rnn_input = h_t
@@ -120,13 +180,28 @@ class Receiver(nn.Module):
         return output_token, entropy, logits, prev_hidden
 
     def forward_output(self, messages_sender, message_lengths):
+        batch_size = messages_sender.shape[0]
+
         embedded = self.embedding_perc(messages_sender)
 
-        packed = pack_padded_sequence(embedded, message_lengths, batch_first=True, enforce_sorted=False)
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size), dtype=torch.float, device=messages_sender.device) for _ in
+                       range(self.num_layers)]
 
-        _, hidden = self.rnn_out(packed)
+        max_message_length = max(message_lengths)
+        hidden_states = torch.zeros((batch_size, max_message_length, self.hidden_size))
 
-        out = self.linear_out(hidden[-1])
+        for step in range(max_message_length):
+            rnn_input = embedded[:, step]
+            for i, layer in enumerate(self.out_cells):
+                h_t = layer(rnn_input, prev_hidden[i])
+                prev_hidden[i] = h_t
+                rnn_input = h_t
+
+            hidden_states[:, step] = h_t
+
+        last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
+
+        out = self.linear_out(last_hidden_states)
 
         return out
 
@@ -213,7 +288,10 @@ class Sender(pl.LightningModule):
 
         self.feedback = feedback
 
-        rnn_cell = GRUCell
+        if layer_norm:
+            rnn_cell = LayerNormGRUCell
+        else:
+            rnn_cell = GRUCell
 
         self.cells = nn.ModuleList(
             [
