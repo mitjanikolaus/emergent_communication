@@ -5,11 +5,11 @@ from collections import defaultdict
 
 import torch
 from pytorch_lightning.utilities import AttributeDict
-from torch import nn, jit
+from torch import nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 import pytorch_lightning as pl
-from torch.nn import ModuleList, Parameter, GRUCell
+from torch.nn import ModuleList, GRUCell
 
 import pandas as pd
 
