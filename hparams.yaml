@@ -6,7 +6,7 @@ model:
   baseline_type: mean
   length_cost: 0
   max_len: 4  # Excluding EOS token!
-  num_features: 4
+  num_attributes: 4
   num_values: 4
   num_senders: 1
   num_receivers: 1
@@ -18,13 +18,11 @@ model:
   sender_entropy_coeff: 0.5
   receiver_entropy_coeff: 0.5
   sender_num_layers: 1
-  receiver_layer_norm: false  # Currently not implemented!
-  sender_layer_norm: false  # Currently not implemented!
   sender_hidden_dim: 500
   sender_learning_speed: 1
   vocab_size: 5 # Including the EOS token!
   noise: 0
-  clarification_requests: false
+  feedback: false
   open_cr: false
   log_topsim_on_validation: false
   log_posdis_on_validation: false
@@ -33,7 +31,7 @@ model:
 trainer:
   default_hp_metric: false
   max_epochs: 100000
-  check_val_every_n_epoch: 100
+  check_val_every_n_epoch: 500
   log_every_n_steps: 1000
   num_sanity_val_steps: 3
   gpus: 0
