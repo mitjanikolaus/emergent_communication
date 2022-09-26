@@ -11,7 +11,7 @@ def run(config):
 
     checkpoint_callback = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True,
                                           filename="{epoch:02d}-{val_acc_no_noise:.2f}")
-    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=50, verbose=True, mode="max",
+    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=config.patience, verbose=True, mode="max",
                                         min_delta=0.01, stopping_threshold=0.999)
 
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
@@ -55,6 +55,7 @@ def get_args():
     parser.add_argument("--batch-size", type=int, default="5120")
     parser.add_argument("--test-set-size", type=float, default=0.1)
     parser.add_argument("--num-workers", type=int, default="0")
+    parser.add_argument("--patience", type=int, default=50)
 
     return parser.parse_args()
 
