@@ -102,7 +102,7 @@ class Receiver(nn.Module):
                        range(self.num_layers)]
 
         max_message_length = max(message_lengths)
-        hidden_states = torch.zeros((batch_size, max_message_length, self.hidden_size))
+        hidden_states = torch.zeros((batch_size, max_message_length, self.hidden_size), dtype=torch.float, device=messages_sender.device)
 
         for step in range(max_message_length):
             rnn_input = embedded[:, step]
