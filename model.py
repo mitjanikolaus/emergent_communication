@@ -468,6 +468,7 @@ class SignalingGameModule(pl.LightningModule):
         self.automatic_optimization = False
 
         self.best_val_acc_no_noise = 0.0
+        self.force_log = False
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -861,7 +862,7 @@ class SignalingGameModule(pl.LightningModule):
         self.log("num_unique_messages", float(num_unique_messages))
 
         # TODO: command line arg:
-        if is_best_checkpoint:
+        if is_best_checkpoint or self.force_log:
             meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
             num_digits = int(math.log10(self.params.vocab_size))
             messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
@@ -869,28 +870,28 @@ class SignalingGameModule(pl.LightningModule):
             messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
             messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
-        if self.params.log_entropy_on_validation or is_best_checkpoint:
+        if self.params.log_entropy_on_validation or self.force_log:
             entropy = compute_entropy(messages.numpy())
             self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
             if is_best_checkpoint:
                 self.log("message_entropy_at_best_val_acc", entropy)
 
-        if self.params.log_topsim_on_validation or is_best_checkpoint:
+        if self.params.log_topsim_on_validation or self.force_log:
             topsim = compute_topsim(meanings, messages)
             self.log("topsim", topsim, prog_bar=True)
             print("Topsim: ", topsim)
             if is_best_checkpoint:
                 self.log("topsim_at_best_val_acc", topsim)
 
-        if self.params.log_posdis_on_validation or is_best_checkpoint:
+        if self.params.log_posdis_on_validation or self.force_log:
             posdis = compute_posdis(self.num_attributes, self.num_values, meanings, messages)
             self.log("posdis", posdis, prog_bar=True)
             print("posdis: ", posdis)
             if is_best_checkpoint:
                 self.log("posdis_at_best_val_acc", posdis)
 
-        if self.params.log_bosdis_on_validation or is_best_checkpoint:
+        if self.params.log_bosdis_on_validation or self.force_log:
             bosdis = compute_bosdis(self.num_attributes, self.num_values, meanings, messages, self.params["vocab_size"])
             self.log("bosdis", bosdis, prog_bar=True)
             print("bodis: ", bosdis)

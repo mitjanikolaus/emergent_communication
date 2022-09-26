@@ -34,6 +34,12 @@ def run(config):
     # Training
     trainer.fit(model, datamodule)
 
+    # Evaluation
+    print("Evaluating: ", trainer.checkpoint_callback.best_model_path)
+    best_model = SignalingGameModule.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
+    best_model.force_log = True
+    trainer.validate(best_model, datamodule, verbose=True)
+
 
 def get_args():
     parser = argparse.ArgumentParser()
