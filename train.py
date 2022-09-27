@@ -52,7 +52,8 @@ def get_args():
     parser.set_defaults(max_epochs=-1,
                         check_val_every_n_epoch=100,
                         log_every_steps=1000,
-                        num_sanity_val_steps=3
+                        num_sanity_val_steps=3,
+                        max_time="00:46:00:00", # Default max time: 46 hours
                         )
 
     # add general and data args
