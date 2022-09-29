@@ -6,11 +6,9 @@ from torch.utils.data import Dataset, DataLoader
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
 
-RANDOM_STATE_TRAIN_TEST_SPLIT = 1
-
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, num_attributes, num_values, max_num_objects, test_set_size, batch_size, num_workers):
+    def __init__(self, num_attributes, num_values, max_num_objects, test_set_size, batch_size, num_workers, seed):
         super().__init__()
         self.num_attributes = num_attributes
         self.num_values = num_values
@@ -19,8 +17,8 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.max_num_objects = max_num_objects
 
         objects = generate_objects(num_attributes, num_values, max_num_objects)
-        objects_train, objects_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
-        objects_train, objects_val = train_test_split(objects_train, test_size=test_set_size, shuffle=True, random_state=RANDOM_STATE_TRAIN_TEST_SPLIT)
+        objects_train, objects_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=seed)
+        objects_train, objects_val = train_test_split(objects_train, test_size=test_set_size, shuffle=True, random_state=seed)
         print(f"Num objects in train: ", len(objects_train))
         print(f"Num objects in val: ", len(objects_val))
         print(f"Num objects in test: ", len(objects_test))

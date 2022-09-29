@@ -1,6 +1,5 @@
 import argparse
 import os
-from argparse import Namespace
 
 import torch
 import pytorch_lightning as pl
@@ -37,7 +36,8 @@ def run(args):
                                          max_num_objects=config.max_num_objects,
                                          test_set_size=config.test_set_size,
                                          batch_size=config.batch_size,
-                                         num_workers=config.num_workers)
+                                         num_workers=config.num_workers,
+                                         seed=config.seed)
 
     if torch.cuda.is_available():
         config["gpus"] = 1
