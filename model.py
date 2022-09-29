@@ -19,7 +19,7 @@ from utils import MeanBaseline, find_lengths, NoBaseline
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, num_layers, open_cr
+            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, num_layers, vocab_size_feedback
     ):
         super(Receiver, self).__init__()
 
@@ -54,11 +54,7 @@ class Receiver(nn.Module):
             ]
         )
 
-        if open_cr:
-            # Open clarification request: receiver can only answer with binary feedback signal
-            self.hidden_to_output = nn.Linear(hidden_size, 2)
-        else:
-            self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
+        self.hidden_to_output = nn.Linear(hidden_size, vocab_size_feedback)
 
         self.linear_out = nn.Linear(hidden_size, n_attributes * n_values)
 
@@ -159,7 +155,7 @@ class Sender(pl.LightningModule):
         max_len,
         num_layers,
         feedback,
-        open_cr = False,
+        vocab_size_feedback,
     ):
         super(Sender, self).__init__()
 
@@ -187,10 +183,7 @@ class Sender(pl.LightningModule):
         vocab_size_noise = vocab_size + 1
         self.embedding_prod = nn.Embedding(vocab_size_noise, embed_dim)
 
-        if open_cr:
-            self.embedding_response = nn.Embedding(2, embed_dim)
-        else:
-            self.embedding_response = nn.Embedding(vocab_size, embed_dim)
+        self.embedding_response = nn.Embedding(vocab_size_feedback, embed_dim)
 
         self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
 
@@ -200,7 +193,6 @@ class Sender(pl.LightningModule):
         self.num_layers = num_layers
 
         self.feedback = feedback
-
 
         self.cells = nn.ModuleList(
             [
@@ -434,7 +426,7 @@ class SignalingGameModule(pl.LightningModule):
                  receiver_embed_dim=30, receiver_num_layers=500, receiver_hidden_dim=500,
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, sender_hidden_dim=500, sender_learning_speed=1,
-                 vocab_size=5, noise=0, feedback=False, open_cr=False,
+                 vocab_size=5, noise=0, feedback=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False, **kwargs):
         super().__init__()
@@ -483,6 +475,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--num-senders", type=int, default=1)
         parser.add_argument("--num-receivers", type=int, default=1)
         parser.add_argument("--vocab-size", type=int, default=5)    # Including the EOS token!
+        parser.add_argument("--vocab-size-feedback", type=int, default=3)
         parser.add_argument("--max-len", type=int, default=4)   # Excluding EOS token!
         parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
 
@@ -541,7 +534,7 @@ class SignalingGameModule(pl.LightningModule):
                                self.params.vocab_size, self.params.sender_embed_dim,
                                self.params.sender_hidden_dim, self.params.max_len,
                                self.params.sender_num_layers,
-                               self.params.feedback, self.params.open_cr)
+                               self.params.feedback, self.params.vocab_size_feedback)
                         for _ in range(self.params.num_senders)
                     ]
                 )
@@ -551,7 +544,7 @@ class SignalingGameModule(pl.LightningModule):
                              self.params.receiver_hidden_dim, self.params.max_len,
                              self.params.num_attributes, self.params.num_values,
                              self.params.receiver_num_layers,
-                             self.params.open_cr)
+                             self.params.vocab_size_feedback)
                     for _ in range(self.params.num_receivers)
                 ]
             )
