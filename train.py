@@ -9,10 +9,10 @@ from model import SignalingGameModule
 def run(config):
     seed_everything(config.seed, workers=True)
 
-    checkpoint_callback = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True,
-                                          filename="{epoch:02d}-{val_acc_no_noise:.2f}")
-    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=config.patience, verbose=True, mode="max",
-                                        min_delta=0.01, stopping_threshold=0.999)
+    checkpoint_callback = ModelCheckpoint(monitor="val_acc", mode="max", save_last=True,
+                                          filename="{epoch:02d}-{val_acc:.2f}")
+    early_stop_callback = EarlyStopping(monitor="val_acc", patience=config.patience, verbose=True, mode="max",
+                                        min_delta=0.01, stopping_threshold=0.99)
 
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
                                          num_values=config.num_values,

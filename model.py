@@ -459,7 +459,7 @@ class SignalingGameModule(pl.LightningModule):
         self.token_noise = self.params["vocab_size"]
         self.automatic_optimization = False
 
-        self.best_val_acc_no_noise = 0.0
+        self.best_val_acc = 0.0
         self.force_log = False
 
     @staticmethod
@@ -823,10 +823,10 @@ class SignalingGameModule(pl.LightningModule):
         self.log("val_acc", val_acc, add_dataloader_idx=False)
         self.log("val_acc_no_noise", val_acc_no_noise, add_dataloader_idx=False)
         is_best_checkpoint = False
-        if self.best_val_acc_no_noise < val_acc_no_noise:
-            self.best_val_acc_no_noise = val_acc_no_noise
+        if self.best_val_acc < val_acc:
+            self.best_val_acc = val_acc
             is_best_checkpoint = True
-        self.log("best_val_acc_no_noise", self.best_val_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
+        self.log("best_val_acc", self.best_val_acc, prog_bar=True, add_dataloader_idx=False)
 
         print("val_acc: ", val_acc)
         print("val_acc_no_noise: ", val_acc_no_noise)
@@ -893,6 +893,6 @@ class SignalingGameModule(pl.LightningModule):
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning
-        metrics = ["best_val_acc_no_noise", "topsim_at_best_val_acc", "posdis_at_best_val_acc",
+        metrics = ["best_val_acc", "val_acc_no_noise", "topsim_at_best_val_acc", "posdis_at_best_val_acc",
                    "bosdis_at_best_val_acc", "test_acc_no_noise"]
         self.logger.log_hyperparams(self.hparams, {m: 0 for m in metrics})
