@@ -426,10 +426,17 @@ class SignalingGameModule(pl.LightningModule):
                  receiver_embed_dim=30, receiver_num_layers=500, receiver_hidden_dim=500,
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, sender_hidden_dim=500, sender_learning_speed=1,
-                 vocab_size=5, noise=0, feedback=False, vocab_size_feedback=3,
+                 vocab_size=5, noise=0, feedback=False, self_repair=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False, **kwargs):
         super().__init__()
+        if self_repair and feedback:
+            raise ValueError("Can't set both self_repair and feedback at the same time!")
+
+        if self_repair:
+            print("Self-repair mode, setting vocab_size_feedback to 2!")
+            vocab_size_feedback = 2
+
         self.save_hyperparameters()
         self.params = AttributeDict(self.hparams)
 
@@ -480,6 +487,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
 
         parser.add_argument("--noise", type=float, default=0)
+        parser.add_argument("--self-repair", default=False, action="store_true")
         parser.add_argument("--feedback", default=False, action="store_true")
 
         parser.add_argument("--log-topsim-on-validation", default=False, action="store_true")
@@ -650,17 +658,18 @@ class SignalingGameModule(pl.LightningModule):
         messages_sender.append(sender_output_tokens_detached)
 
         if self.params.feedback:
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(sender_output_tokens)
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(sender_output_tokens_detached)
             receiver_entropies.append(receiver_step_entropy)
             receiver_logits.append(receiver_step_logits)
             receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
             input_cr = receiver_output_tokens.detach()
+        elif self.params.self_repair:
+            input_cr = (sender_output_tokens_detached == self.token_noise).long()
         else:
             input_cr = None
 
         for step in range(1, self.params.max_len):
-
-            sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_cr)
+            sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens_detached, sender_prev_hidden, input_cr)
 
             sender_entropies.append(sender_step_entropy)
             sender_logits.append(sender_step_logits)
@@ -678,6 +687,9 @@ class SignalingGameModule(pl.LightningModule):
                 messages_receiver.append(receiver_output_tokens)
 
                 input_cr = receiver_output_tokens.detach()
+
+            elif self.params.self_repair:
+                input_cr = (sender_output_tokens_detached == self.token_noise).long()
 
         messages_sender = torch.stack(messages_sender).permute(1, 0)
         sender_logits = torch.stack(sender_logits).permute(1, 0)
