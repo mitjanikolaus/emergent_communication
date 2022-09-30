@@ -481,7 +481,6 @@ class SignalingGameModule(pl.LightningModule):
 
         parser.add_argument("--noise", type=float, default=0)
         parser.add_argument("--feedback", default=False, action="store_true")
-        parser.add_argument("--open-cr", default=False, action="store_true")
 
         parser.add_argument("--log-topsim-on-validation", default=False, action="store_true")
         parser.add_argument("--log-posdis-on-validation", default=False, action="store_true")
