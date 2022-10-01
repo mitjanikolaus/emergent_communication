@@ -1,4 +1,7 @@
 import argparse
+import os
+import pickle
+
 from pytorch_lightning import seed_everything, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
@@ -9,9 +12,11 @@ from model import SignalingGameModule
 def run(config):
     seed_everything(config.seed, workers=True)
 
-    checkpoint_callback = ModelCheckpoint(monitor="val_acc", mode="max", save_last=True,
+    checkpoint_callback_1 = ModelCheckpoint(monitor="val_acc", mode="max", save_last=True,
                                           filename="{epoch:02d}-{val_acc:.2f}")
-    early_stop_callback = EarlyStopping(monitor="val_acc", patience=config.patience, verbose=True, mode="max",
+    checkpoint_callback_2 = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True,
+                                          filename="{epoch:02d}-{val_acc_no_noise:.2f}")
+    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=config.patience, verbose=True, mode="max",
                                         min_delta=0.01, stopping_threshold=0.99)
 
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
@@ -30,16 +35,30 @@ def run(config):
     else:
         model = SignalingGameModule(**vars(config))
 
-    trainer = Trainer.from_argparse_args(config, callbacks=[checkpoint_callback, early_stop_callback])
+    trainer = Trainer.from_argparse_args(config, callbacks=[checkpoint_callback_1, checkpoint_callback_2, early_stop_callback])
 
     # Training
     trainer.fit(model, datamodule)
 
     # Evaluation
-    print("Evaluating: ", trainer.checkpoint_callback.best_model_path)
-    best_model = SignalingGameModule.load_from_checkpoint(trainer.checkpoint_callback.best_model_path)
-    best_model.force_log = True
-    trainer.validate(best_model, datamodule, verbose=True)
+    best_model_1 = SignalingGameModule.load_from_checkpoint(checkpoint_callback_1.best_model_path)
+    epoch_ckpt_1 = int(checkpoint_callback_1.best_model_path.split("epoch=")[1].split("-")[0])
+    best_model_1.force_log = True
+    print("\n\nEvaluating: ", checkpoint_callback_1.best_model_path)
+    results_1 = trainer.validate(best_model_1, datamodule, verbose=True)
+    path_1 = checkpoint_callback_1.best_model_path.replace(".ckpt", "_results.pickle")
+    pickle.dump(results_1, open(path_1, "wb"))
+
+    best_model_2 = SignalingGameModule.load_from_checkpoint(checkpoint_callback_2.best_model_path)
+    epoch_ckpt_2 = int(checkpoint_callback_2.best_model_path.split("epoch=")[1].split("-")[0])
+    if epoch_ckpt_1 != epoch_ckpt_2:
+        best_model_2.force_log = True
+        print("\n\nEvaluating: ", checkpoint_callback_2.best_model_path)
+        results_2 = trainer.validate(best_model_2, datamodule, verbose=True)
+    else:
+        results_2 = results_1
+    path_2 = checkpoint_callback_2.best_model_path.replace(".ckpt", "_results.pickle")
+    pickle.dump(results_2, open(path_2, "wb"))
 
 
 def get_args():
