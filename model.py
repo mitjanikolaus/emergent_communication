@@ -17,9 +17,60 @@ from language_analysis import compute_topsim, compute_entropy, compute_posdis, c
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
+class LayerNormGRUCell(nn.Module):
+    def __init__(self, input_size, hidden_size, bias=True):
+        super(LayerNormGRUCell, self).__init__()
+
+        self.ln_i2h = nn.LayerNorm(2*hidden_size, elementwise_affine=False)
+        self.ln_h2h = nn.LayerNorm(2*hidden_size, elementwise_affine=False)
+        self.ln_cell_1 = nn.LayerNorm(hidden_size, elementwise_affine=False)
+        self.ln_cell_2 = nn.LayerNorm(hidden_size, elementwise_affine=False)
+
+        self.i2h = nn.Linear(input_size, 2 * hidden_size, bias=bias)
+        self.h2h = nn.Linear(hidden_size, 2 * hidden_size, bias=bias)
+        self.h_hat_W = nn.Linear(input_size, hidden_size, bias=bias)
+        self.h_hat_U = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.hidden_size = hidden_size
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        std = 1.0 / math.sqrt(self.hidden_size)
+        for w in self.parameters():
+            w.data.uniform_(-std, std)
+
+    def forward(self, x, h):
+        h = h.view(h.size(0), -1)
+        x = x.view(x.size(0), -1)
+
+        i2h = self.i2h(x)
+        h2h = self.h2h(h)
+
+        i2h = self.ln_i2h(i2h)
+        h2h = self.ln_h2h(h2h)
+
+        preact = i2h + h2h
+
+        gates = preact[:, :].sigmoid()
+        z_t = gates[:, :self.hidden_size]
+        r_t = gates[:, -self.hidden_size:]
+
+        h_hat_first_half = self.h_hat_W(x)
+        h_hat_last_half = self.h_hat_U(h)
+
+        h_hat_first_half = self.ln_cell_1(h_hat_first_half)
+        h_hat_last_half = self.ln_cell_2(h_hat_last_half)
+
+        h_hat = torch.tanh(h_hat_first_half + torch.mul(r_t, h_hat_last_half))
+
+        h_t = torch.mul(1-z_t, h ) + torch.mul(z_t, h_hat)
+
+        h_t = h_t.view(h_t.size(0), -1)
+        return h_t
+
+
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, num_layers, vocab_size_feedback
+            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, layer_norm, num_layers, vocab_size_feedback
     ):
         super(Receiver, self).__init__()
 
@@ -36,20 +87,25 @@ class Receiver(nn.Module):
         self.num_layers = num_layers
         self.max_len = max_len
 
+        if layer_norm:
+            rnn_cell = LayerNormGRUCell
+        else:
+            rnn_cell = GRUCell
+
         self.feedback_cells = nn.ModuleList(
             [
-                GRUCell(input_size=embed_dim, hidden_size=hidden_size)
+                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else GRUCell(input_size=hidden_size, hidden_size=hidden_size)
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(num_layers)
             ]
         )
 
         self.out_cells = nn.ModuleList(
             [
-                GRUCell(input_size=embed_dim, hidden_size=hidden_size)
+                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else GRUCell(input_size=hidden_size, hidden_size=hidden_size)
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(num_layers)
             ]
         )
@@ -153,6 +209,7 @@ class Sender(pl.LightningModule):
         embed_dim,
         hidden_size,
         max_len,
+        layer_norm,
         num_layers,
         feedback,
         vocab_size_feedback,
@@ -194,11 +251,16 @@ class Sender(pl.LightningModule):
 
         self.feedback = feedback
 
+        if layer_norm:
+            rnn_cell = LayerNormGRUCell
+        else:
+            rnn_cell = GRUCell
+
         self.cells = nn.ModuleList(
             [
-                GRUCell(input_size=embed_dim, hidden_size=hidden_size)
+                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
                 if i == 0
-                else GRUCell(input_size=hidden_size, hidden_size=hidden_size)
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
             ]
         )
@@ -308,6 +370,8 @@ class SenderReceiver(pl.LightningModule):
         embed_dim,
         hidden_size,
         max_len,
+        sender_layer_norm,
+        receiver_layer_norm,
         num_layers=1,
     ):
         super(SenderReceiver, self).__init__()
@@ -326,6 +390,9 @@ class SenderReceiver(pl.LightningModule):
         self.embed_dim = embed_dim
         self.num_layers = num_layers
 
+        if sender_layer_norm != receiver_layer_norm:
+            raise ValueError("Joint Sender and Receiver requires both sender_layer_norm and receiver_layer_norm to be "
+                             "set to true or false at the same time")
         rnn_cell = GRUCell
         self.cells = nn.ModuleList(
             [
@@ -425,7 +492,8 @@ class SignalingGameModule(pl.LightningModule):
                  max_len=4, length_cost=0, num_attributes=4, num_values=4, num_senders=1, num_receivers=1,
                  receiver_embed_dim=30, receiver_num_layers=500, receiver_hidden_dim=500,
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
-                 receiver_entropy_coeff=0.5, sender_num_layers=1, sender_hidden_dim=500, sender_learning_speed=1,
+                 receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
+                 sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
                  vocab_size=5, noise=0, feedback=False, self_repair=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False, **kwargs):
@@ -500,12 +568,14 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--sender-hidden-dim", type=int, default=500)
         parser.add_argument("--sender-learning-speed", type=float, default=1)
         parser.add_argument("--sender-entropy-coeff", type=float, default=0.5)
+        parser.add_argument("--sender-layer-norm", default=False, action="store_true")
 
         parser.add_argument("--receiver_embed_dim", type=int, default=30)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
         parser.add_argument("--receiver-hidden-dim", type=int, default=500)
         parser.add_argument("--receiver-learning-speed", type=float, default=1)
         parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
+        parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
 
         return parent_parser
 
@@ -518,6 +588,7 @@ class SignalingGameModule(pl.LightningModule):
                     SenderReceiver(self.params.num_attributes, self.params.num_values,
                                    self.params.vocab_size, self.params.sender_embed_dim,
                                    self.params.sender_hidden_dim, self.params.max_len,
+                                   self.params.sender_layer_norm, self.params.receiver_layer_norm,
                                    self.params.sender_num_layers)
                     for _ in range(self.params.num_senders * 2)
                 ]
@@ -540,7 +611,7 @@ class SignalingGameModule(pl.LightningModule):
                                self.params.num_attributes, self.params.num_values,
                                self.params.vocab_size, self.params.sender_embed_dim,
                                self.params.sender_hidden_dim, self.params.max_len,
-                               self.params.sender_num_layers,
+                               self.params.sender_layer_norm, self.params.sender_num_layers,
                                self.params.feedback, self.params.vocab_size_feedback)
                         for _ in range(self.params.num_senders)
                     ]
@@ -550,7 +621,7 @@ class SignalingGameModule(pl.LightningModule):
                     Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
                              self.params.receiver_hidden_dim, self.params.max_len,
                              self.params.num_attributes, self.params.num_values,
-                             self.params.receiver_num_layers,
+                             self.params.receiver_layer_norm, self.params.receiver_num_layers,
                              self.params.vocab_size_feedback)
                     for _ in range(self.params.num_receivers)
                 ]
