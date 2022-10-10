@@ -111,4 +111,7 @@ venv.bak/
 # Output directories
 out/
 data/
-lightning_logs/
+lightning_logs*/
+
+# Output files
+*.pickle
