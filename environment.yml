@@ -169,4 +169,3 @@ dependencies:
     - pytorch-lightning==1.6.3
     - setuptools==59.5.0
     - typing-extensions==4.3.0
-prefix: /storage/raid1/homedirs/mitja.nikolaus/anaconda3/envs/emergent_communication

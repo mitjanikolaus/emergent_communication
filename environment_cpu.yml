@@ -189,4 +189,3 @@ dependencies:
     - numexpr==2.8.3
     - pandas==1.4.4
     - tbparse==0.0.7
-prefix: /home/mitja/anaconda3/envs/emergent_communication
