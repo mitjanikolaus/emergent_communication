@@ -198,9 +198,7 @@ class Sender(pl.LightningModule):
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
-        # Vocab size + 1 for noise handling
-        vocab_size_noise = vocab_size + 1
-        self.embedding_prod = nn.Embedding(vocab_size_noise, embed_dim)
+        self.embedding_prod = nn.Embedding(vocab_size, embed_dim)
 
         self.embedding_response = nn.Embedding(vocab_size_feedback, embed_dim)
 
@@ -494,7 +492,7 @@ class SignalingGameModule(pl.LightningModule):
             input_cr = None
 
         for step in range(1, self.params.max_len):
-            sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens_detached, sender_prev_hidden, input_cr)
+            sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_cr)
 
             sender_entropies.append(sender_step_entropy)
             sender_logits.append(sender_step_logits)
