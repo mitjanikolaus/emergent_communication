@@ -565,14 +565,14 @@ class SignalingGameModule(pl.LightningModule):
 
         parser.add_argument("--sender_embed_dim", type=int, default=5)
         parser.add_argument("--sender-num-layers", type=int, default=1)
-        parser.add_argument("--sender-hidden-dim", type=int, default=100)
+        parser.add_argument("--sender-hidden-dim", type=int, default=500)
         parser.add_argument("--sender-learning-speed", type=float, default=1)
         parser.add_argument("--sender-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--sender-layer-norm", default=False, action="store_true")
 
         parser.add_argument("--receiver_embed_dim", type=int, default=30)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
-        parser.add_argument("--receiver-hidden-dim", type=int, default=100)
+        parser.add_argument("--receiver-hidden-dim", type=int, default=500)
         parser.add_argument("--receiver-learning-speed", type=float, default=1)
         parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
