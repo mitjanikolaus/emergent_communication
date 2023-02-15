@@ -76,7 +76,8 @@ def get_args():
                         max_time="00:46:00:00", # Default max time: 46 hours
                         )
 
-    # add general and data args
+    # Add general and data args:
+    # These args have to be added manually as they're not part of the model args
     parser.add_argument("--seed", type=int, default="1")
     parser.add_argument("--max-num-objects", type=int, default="100000")
     parser.add_argument("--batch-size", type=int, default="5120")

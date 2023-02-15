@@ -565,14 +565,14 @@ class SignalingGameModule(pl.LightningModule):
 
         parser.add_argument("--sender_embed_dim", type=int, default=5)
         parser.add_argument("--sender-num-layers", type=int, default=1)
-        parser.add_argument("--sender-hidden-dim", type=int, default=500)
+        parser.add_argument("--sender-hidden-dim", type=int, default=100)
         parser.add_argument("--sender-learning-speed", type=float, default=1)
         parser.add_argument("--sender-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--sender-layer-norm", default=False, action="store_true")
 
         parser.add_argument("--receiver_embed_dim", type=int, default=30)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
-        parser.add_argument("--receiver-hidden-dim", type=int, default=500)
+        parser.add_argument("--receiver-hidden-dim", type=int, default=100)
         parser.add_argument("--receiver-learning-speed", type=float, default=1)
         parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
@@ -902,8 +902,8 @@ class SignalingGameModule(pl.LightningModule):
         accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[0]])
         val_acc = accs.float().mean().item()
         val_acc_no_noise = accs_no_noise.float().mean().item()
-        self.log("val_acc", val_acc, add_dataloader_idx=False)
-        self.log("val_acc_no_noise", val_acc_no_noise, add_dataloader_idx=False)
+        self.log("val_acc", val_acc, prog_bar=True, add_dataloader_idx=False)
+        self.log("val_acc_no_noise", val_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
         is_best_checkpoint = False
         if self.best_val_acc_no_noise < val_acc_no_noise:
             self.best_val_acc_no_noise = val_acc_no_noise
