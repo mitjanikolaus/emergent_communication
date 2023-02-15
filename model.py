@@ -79,9 +79,7 @@ class Receiver(nn.Module):
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
-        self.linear_in_perc = nn.Linear(hidden_size, hidden_size)
-
-        self.embedding_perc = nn.Embedding(vocab_size_perception, embed_dim)
+        self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -114,8 +112,6 @@ class Receiver(nn.Module):
 
         self.linear_out = nn.Linear(hidden_size, n_attributes * n_values)
 
-        self.attn = nn.Linear(hidden_size, max_len * n_attributes * n_values)
-
     def forward_first_turn(self, messages):
         batch_size = messages.shape[0]
 
@@ -125,7 +121,7 @@ class Receiver(nn.Module):
         return self.forward(messages, prev_hidden)
 
     def forward(self, messages, prev_hidden):
-        rnn_input = self.embedding_perc(messages)
+        rnn_input = self.embedding(messages)
 
         for i, layer in enumerate(self.feedback_cells):
             h_t = layer(rnn_input, prev_hidden[i])
@@ -148,7 +144,7 @@ class Receiver(nn.Module):
     def forward_output(self, messages_sender, message_lengths):
         batch_size = messages_sender.shape[0]
 
-        embedded = self.embedding_perc(messages_sender)
+        embedded = self.embedding(messages_sender)
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size), dtype=torch.float, device=messages_sender.device) for _ in
                        range(self.num_layers)]
@@ -172,34 +168,6 @@ class Receiver(nn.Module):
         return out
 
 
-class ReceiverMLP(nn.Module):
-    def __init__(
-            self, vocab_size, embed_dim, n_attributes, n_values, max_message_len
-    ):
-        super(ReceiverMLP, self).__init__()
-
-        # Add one symbol for noise treatment
-        vocab_size += 1
-
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.linear_message = nn.Linear(embed_dim * (max_message_len + 1), embed_dim)
-
-        self.linear_out = nn.Linear(embed_dim, n_attributes*n_values)
-
-    def forward(self, batch):
-        message, input, message_lengths = batch
-        batch_size = message.shape[0]
-
-        embedded_message = self.embedding(message)
-        embedded_message = F.relu(embedded_message)
-        embedded_message = self.linear_message(embedded_message.reshape(batch_size, -1))
-        embedded_message = F.relu(embedded_message)
-
-        output = self.linear_out(embedded_message)
-
-        return output
-
-
 class Sender(pl.LightningModule):
     def __init__(
         self,
@@ -220,10 +188,7 @@ class Sender(pl.LightningModule):
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
-        self.embed_input = nn.Linear(n_attributes*n_values, hidden_size)
-
-        self.linear_in_perc = nn.Linear(n_attributes * n_values, hidden_size)
-        self.linear_in_prod = nn.Linear(hidden_size * 2, hidden_size)
+        self.linear_in_objects = nn.Linear(n_attributes * n_values, hidden_size)
 
         self.feedback = feedback
         if self.feedback:
@@ -231,18 +196,13 @@ class Sender(pl.LightningModule):
         else:
             self.linear_in_response = nn.Linear(embed_dim, embed_dim)
 
-        self.embed_input_rnn = nn.Linear(hidden_size, hidden_size)
-
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
-        self.embedding_perc = nn.Embedding(vocab_size, embed_dim)
 
         # Vocab size + 1 for noise handling
         vocab_size_noise = vocab_size + 1
         self.embedding_prod = nn.Embedding(vocab_size_noise, embed_dim)
 
         self.embedding_response = nn.Embedding(vocab_size_feedback, embed_dim)
-
-        self.linear_predict_noise_loc = nn.Linear(hidden_size, max_len)
 
         self.hidden_size = hidden_size
         self.embed_dim = embed_dim
@@ -268,7 +228,7 @@ class Sender(pl.LightningModule):
     def forward_first_turn(self, input_objects):
         batch_size = input_objects.shape[0]
 
-        prev_hidden = [self.linear_in_perc(input_objects)]
+        prev_hidden = [self.linear_in_objects(input_objects)]
         prev_hidden.extend(
             [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
         )
@@ -308,183 +268,6 @@ class Sender(pl.LightningModule):
         logits = distr.log_prob(output_tokens)
 
         return output_tokens, entropy, logits, prev_hidden
-
-
-class OptimalSender(pl.LightningModule):
-    # TODO: update for multiple turns
-    def __init__(
-        self,
-        n_attributes,
-        n_values,
-        vocab_size,
-        max_len,
-    ):
-        super(OptimalSender, self).__init__()
-
-        self.max_len = max_len
-
-        self.n_attributes = n_attributes
-        self.n_values = n_values
-
-        self.vocab_size = vocab_size
-
-        assert n_values + 2 <= vocab_size   # +1 for case if value is not set and + 1 for EOS token
-        assert n_attributes + 1 <= max_len    # + 1 to encode speech act
-
-    def one_hot_to_message(self, intent_objects):
-        values = []
-        for i in range(self.n_attributes):
-            # Cut out relevant range for this feature
-            relevant_range = intent_objects[:, i * self.n_values:(i + 1) * self.n_values]
-            # Prepend zeros for case if feature is not set
-            zeros = torch.zeros(relevant_range.shape[0]).unsqueeze(1).type_as(intent_objects)
-            relevant_range = torch.cat((zeros, relevant_range), dim=1)
-
-            value = torch.argmax(relevant_range, dim=1)
-            values.append(value)
-
-        return torch.stack(values).T
-
-    def forward(self, x):
-        batch_size = x.shape[0]
-
-        messages = self.create_messages(x)
-
-        zeros = torch.zeros((batch_size, 1)).type_as(x)
-
-        sequences = torch.cat([messages.long(), zeros.long()], dim=1)
-        logits = torch.zeros_like(sequences)
-        entropy = torch.zeros_like(sequences)
-
-        return sequences, logits, entropy
-
-
-class SenderReceiver(pl.LightningModule):
-    # TODO: update for multiple turns
-    def __init__(
-        self,
-        speech_acts,
-        n_attributes,
-        n_values,
-        vocab_size,
-        embed_dim,
-        hidden_size,
-        max_len,
-        sender_layer_norm,
-        receiver_layer_norm,
-        num_layers=1,
-    ):
-        super(SenderReceiver, self).__init__()
-
-        # Add one symbol for noise treatment
-        vocab_size_perception = vocab_size + 1
-
-        self.max_len = max_len
-        self.speech_acts = speech_acts
-        self.embed_input = nn.Linear(n_attributes*n_values, embed_dim)
-
-        self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
-        self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
-
-        self.hidden_size = hidden_size
-        self.embed_dim = embed_dim
-        self.num_layers = num_layers
-
-        if sender_layer_norm != receiver_layer_norm:
-            raise ValueError("Joint Sender and Receiver requires both sender_layer_norm and receiver_layer_norm to be "
-                             "set to true or false at the same time")
-        rnn_cell = GRUCell
-        self.cells = nn.ModuleList(
-            [
-                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
-                if i == 0
-                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
-                for i in range(self.num_layers)
-            ]
-        )
-
-    def forward(self, batch):
-        if isinstance(batch, tuple):
-            return self.forward_receiver(batch)
-        else:
-            return self.forward_sender(batch)
-
-    def forward_sender(self, x):
-        batch_size = x.shape[0]
-
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(x) for _ in range(self.num_layers)]
-
-        input = self.embed_input(x)
-
-        sequence = []
-        logits = []
-        entropy = []
-
-        for step in range(self.max_len):
-            for i, layer in enumerate(self.cells):
-                h_t = layer(input, prev_hidden[i])
-                prev_hidden[i] = h_t
-                input = h_t
-
-            step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
-            distr = Categorical(logits=step_logits)
-            entropy.append(distr.entropy())
-
-            if self.training:
-                x = distr.sample()
-            else:
-                x = step_logits.argmax(dim=1)
-            logits.append(distr.log_prob(x))
-
-            input = self.embedding(x)
-            sequence.append(x)
-
-        sequence = torch.stack(sequence).permute(1, 0)
-        logits = torch.stack(logits).permute(1, 0)
-        entropy = torch.stack(entropy).permute(1, 0)
-
-        zeros = torch.zeros((sequence.size(0), 1)).type_as(x)
-
-        sequence = torch.cat([sequence, zeros.long()], dim=1)
-        logits = torch.cat([logits, zeros], dim=1)
-        entropy = torch.cat([entropy, zeros], dim=1)
-
-        return sequence, logits, entropy
-
-    def forward_receiver(self, batch):
-        message, input_receiver, message_lengths = batch
-        batch_size = message.shape[0]
-
-        perplexities = []
-        for objects_idx in range(input_receiver.shape[1]):
-            input = self.embed_input(input_receiver[:,objects_idx])
-
-            prev_hidden = [torch.zeros((batch_size, self.hidden_size)).type_as(input_receiver) for _ in
-                           range(self.num_layers)]
-
-            perplexities_objects = []
-            for step in range(self.max_len):
-                for i, layer in enumerate(self.cells):
-                    h_t = layer(input, prev_hidden[i])
-                    prev_hidden[i] = h_t
-                    input = h_t
-
-                step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
-                # TODO: EOS handling!
-                ppls = step_logits[range(batch_size), message[:,step]]
-                perplexities_objects.append(ppls)
-
-                x = message[:, step]
-                input = self.embedding(x)
-
-            perplexities_objects = torch.stack(perplexities_objects).sum(dim=0)
-            perplexities.append(perplexities_objects)
-
-        perplexities = torch.stack(perplexities).permute(1,0)
-
-        softmaxed = F.softmax(perplexities, dim=1)
-
-        return softmaxed
 
 
 class SignalingGameModule(pl.LightningModule):
@@ -581,29 +364,10 @@ class SignalingGameModule(pl.LightningModule):
 
     def init_agents(self):
         if self.params.symmetric:
-            if self.params.num_senders != self.params.num_receivers:
-                raise ValueError("Symmetric game requires same number of senders and receivers.")
-            self.senders = ModuleList(
-                [
-                    SenderReceiver(self.params.num_attributes, self.params.num_values,
-                                   self.params.vocab_size, self.params.sender_embed_dim,
-                                   self.params.sender_hidden_dim, self.params.max_len,
-                                   self.params.sender_layer_norm, self.params.receiver_layer_norm,
-                                   self.params.sender_num_layers)
-                    for _ in range(self.params.num_senders * 2)
-                ]
-            )
-            self.receivers = self.senders
+            raise NotImplementedError()
         else:
             if self.params.optimal_sender:
-                self.senders = ModuleList(
-                    [
-                        OptimalSender(
-                               self.params.num_attributes, self.params.num_values,
-                               self.params.vocab_size, self.params.max_len)
-                        for _ in range(self.params.num_senders)
-                    ]
-                )
+                raise NotImplementedError()
             else:
                 self.senders = ModuleList(
                     [
@@ -626,16 +390,6 @@ class SignalingGameModule(pl.LightningModule):
                     for _ in range(self.params.num_receivers)
                 ]
             )
-
-    def init_MLP_receivers(self):
-        self.receivers = ModuleList(
-            [
-                ReceiverMLP(self.params.vocab_size, self.params.receiver_embed_dim,
-                            self.params.num_attributes, self.params.num_values,
-                            self.params.max_len)
-                for _ in range(self.params.num_receivers)
-            ]
-        )
 
     def freeze_senders(self):
         for sender in self.senders:
