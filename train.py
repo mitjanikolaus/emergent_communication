@@ -80,7 +80,7 @@ def get_args():
     # These args have to be added manually as they're not part of the model args
     parser.add_argument("--seed", type=int, default="1")
     parser.add_argument("--max-num-objects", type=int, default="100000")
-    parser.add_argument("--batch-size", type=int, default="5120")
+    parser.add_argument("--batch-size", type=int, default="1024")
     parser.add_argument("--test-set-size", type=float, default=0.1)
     parser.add_argument("--num-workers", type=int, default="0")
     parser.add_argument("--patience", type=int, default=50)
