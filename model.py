@@ -106,6 +106,14 @@ class Receiver(nn.Module):
 
         self.feedback = feedback
 
+    def reset_parameters(self):
+        for layer in self.children():
+            if hasattr(layer, 'reset_parameters'):
+                layer.reset_parameters()
+            else:
+                for module in layer:
+                    module.reset_parameters()
+
     def forward_first_turn(self, messages):
         batch_size = messages.shape[0]
 
@@ -200,6 +208,14 @@ class Sender(pl.LightningModule):
                 for i in range(self.num_layers)
             ]
         )
+
+    def reset_parameters(self):
+        for layer in self.children():
+            if hasattr(layer, 'reset_parameters'):
+                layer.reset_parameters()
+            else:
+                for module in layer:
+                    module.reset_parameters()
 
     def forward_first_turn(self, input_objects):
         batch_size = input_objects.shape[0]
@@ -322,19 +338,25 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--log-bosdis-on-validation", default=False, action="store_true")
         parser.add_argument("--log-entropy-on-validation", default=False, action="store_true")
 
-        parser.add_argument("--sender_embed_dim", type=int, default=5)
+        parser.add_argument("--sender_embed_dim", type=int, default=100)
         parser.add_argument("--sender-num-layers", type=int, default=1)
         parser.add_argument("--sender-hidden-dim", type=int, default=500)
         parser.add_argument("--sender-learning-speed", type=float, default=1)
         parser.add_argument("--sender-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--sender-layer-norm", default=False, action="store_true")
 
-        parser.add_argument("--receiver_embed_dim", type=int, default=30)
+        parser.add_argument("--receiver_embed_dim", type=int, default=100)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
         parser.add_argument("--receiver-hidden-dim", type=int, default=500)
         parser.add_argument("--receiver-learning-speed", type=float, default=1)
         parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
+
+        parser.add_argument("--reset-parameters", default=False, action="store_true")
+        parser.add_argument("--update-masks", default=False, action="store_true")
+        parser.add_argument("--reset-parameters-interval", type=int, default=1000,
+                            help="Reset interval (in number of epochs)")
+        parser.add_argument("--reset-parameters-fraction", type=float, default=0.1)
 
         return parent_parser
 
@@ -589,6 +611,38 @@ class SignalingGameModule(pl.LightningModule):
             # Replace all randomly selected values (but only if they are not EOS symbols (0))
             messages[(indices == 1) & (messages != 0)] = self.token_noise
         return messages
+
+    def update_reset_masks(self):
+        self.senders_mask_dict = {}
+        self.receivers_mask_dict = {}
+        frac = self.hparams.reset_parameters_fraction
+        for mask_dict, module in zip([self.senders_mask_dict, self.receivers_mask_dict],
+                                     [self.senders, self.receivers]):
+            for name, param in module.named_parameters():
+                weight_mag = torch.abs(param.detach().clone())
+                topk = torch.topk(weight_mag.flatten(), k=int(weight_mag.nelement() * (frac)), largest=False)
+                temp_mask = torch.ones(weight_mag.nelement())
+                temp_mask[topk.indices] = 0
+                mask_dict[name] = temp_mask.bool().view(weight_mag.shape)
+
+    def on_train_epoch_start(self):
+        if self.current_epoch == 0 and self.hparams.reset_parameters:
+            self.update_reset_masks()
+
+        if self.hparams.reset_parameters and (self.current_epoch + 1) % self.hparams.reset_parameters_interval == 0:
+            if self.hparams.update_masks:
+                self.update_reset_masks()
+
+            for mask_dict, module in zip([self.senders_mask_dict, self.receivers_mask_dict], [self.senders, self.receivers]):
+                weight_dict = {}
+                for name, param in module.named_parameters():
+                    weight_dict[name] = param.detach().clone()
+
+                for agent in module:
+                    agent.reset_parameters()
+
+                for name, param in module.named_parameters():
+                    param.data[mask_dict[name]] = weight_dict[name][mask_dict[name]]
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
