@@ -11,8 +11,6 @@ from torch.distributions import Categorical
 import pytorch_lightning as pl
 from torch.nn import ModuleList, GRUCell
 
-import pandas as pd
-
 from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
 from utils import MeanBaseline, find_lengths, NoBaseline
 
@@ -131,14 +129,14 @@ class Receiver(nn.Module):
             rnn_input = h_t
 
         if self.feedback:
-            step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
-            distr = Categorical(logits=step_logits)
+            step_probs = F.softmax(self.hidden_to_output(h_t), dim=1)
+            distr = Categorical(probs=step_probs)
             entropy = distr.entropy()
 
             if self.training:
                 output_token = distr.sample()
             else:
-                output_token = step_logits.argmax(dim=1)
+                output_token = step_probs.argmax(dim=1)
 
             logits = distr.log_prob(output_token)
         else:
@@ -154,6 +152,129 @@ class Receiver(nn.Module):
         hidden_states_last_token = hidden_states[range(batch_size), message_lengths - 1]
 
         return self.linear_out(hidden_states_last_token)
+
+
+class ReceiverDiscrimination(nn.Module):
+    def __init__(
+            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, layer_norm, num_layers,
+            feedback, vocab_size_feedback, num_objects, stochastic
+    ):
+        super(ReceiverDiscrimination, self).__init__()
+
+        # Add one symbol for noise treatment
+        vocab_size_perception = vocab_size + 1
+
+        self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
+
+        self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
+        self.linear_objects_in = nn.Linear(n_attributes * n_values, embed_dim)
+
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.max_len = max_len
+        self.num_objects = num_objects
+
+        self.feedback = feedback
+        self.stochastic = stochastic
+
+        if layer_norm:
+            rnn_cell = LayerNormGRUCell
+        else:
+            rnn_cell = GRUCell
+
+        rnn_input_size = embed_dim
+        if self.feedback:
+            rnn_input_size = embed_dim*(1+self.num_objects)
+        self.cells = nn.ModuleList(
+            [
+                rnn_cell(input_size=rnn_input_size, hidden_size=hidden_size)
+                if i == 0
+                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
+                for i in range(num_layers)
+            ]
+        )
+
+        self.linear_objects_2 = nn.Linear(n_attributes * n_values, hidden_size)
+        self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
+
+        self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
+
+    def reset_parameters(self):
+        for layer in self.children():
+            if hasattr(layer, 'reset_parameters'):
+                layer.reset_parameters()
+            else:
+                for module in layer:
+                    module.reset_parameters()
+
+    def forward_first_turn(self, candidate_objects, messages):
+        batch_size = messages.shape[0]
+
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size), dtype=torch.float, device=messages.device) for _ in
+                       range(self.num_layers)]
+
+        return self.forward(candidate_objects, messages, prev_hidden)
+
+    def forward(self, candidate_objects, messages, prev_hidden):
+        batch_size = messages.shape[0]
+
+        embedded_messages = self.embedding(messages)
+        rnn_input = embedded_messages
+
+        if self.feedback:
+            embedded_objects = self.linear_objects_in(candidate_objects)
+            rnn_input = torch.cat((embedded_messages, embedded_objects.reshape(batch_size, -1)), dim=-1)
+
+        for i, layer in enumerate(self.cells):
+            h_t = layer(rnn_input, prev_hidden[i])
+            prev_hidden[i] = h_t
+            rnn_input = h_t
+
+        if self.feedback:
+            step_probs = F.softmax(self.hidden_to_feedback_output(h_t), dim=1)
+            distr = Categorical(probs=step_probs)
+            entropy = distr.entropy()
+
+            if self.training:
+                output_token = distr.sample()
+            else:
+                output_token = step_probs.argmax(dim=1)
+
+            logits = distr.log_prob(output_token)
+        else:
+            output_token = None
+            entropy = None
+            logits = None
+
+        return output_token, entropy, logits, prev_hidden
+
+    def output(self, candidate_objects, hidden_states, message_lengths):
+        batch_size = hidden_states.shape[0]
+
+        embedded_objects = self.linear_objects_2(candidate_objects)
+
+        hidden_states_last_token = hidden_states[range(batch_size), message_lengths - 1]
+
+        hidden_states_last_token = self.hidden_to_objects_mul(hidden_states_last_token)
+
+        output = torch.matmul(embedded_objects, hidden_states_last_token.unsqueeze(2))
+
+        output = output.squeeze()
+
+        if self.stochastic:
+            probs = F.softmax(output, dim=-1)
+            distr = Categorical(probs=probs)
+            entropy = distr.entropy()
+            if self.training:
+                output_value = distr.sample()
+            else:
+                output_value = probs.argmax(dim=1)
+
+            logits = distr.log_prob(output_value)
+
+            return output_value, entropy, logits
+        else:
+            return output
 
 
 class Sender(pl.LightningModule):
@@ -248,13 +369,13 @@ class Sender(pl.LightningModule):
             prev_hidden[i] = h_t
             input = h_t
 
-        step_logits = F.log_softmax(self.hidden_to_output(h_t), dim=1)
-        distr = Categorical(logits=step_logits)
+        step_probs = F.softmax(self.hidden_to_output(h_t), dim=1)
+        distr = Categorical(probs=step_probs)
 
         if self.training:
             output_tokens = distr.sample()
         else:
-            output_tokens = step_logits.argmax(dim=1)
+            output_tokens = step_probs.argmax(dim=1)
 
         entropy = distr.entropy()
         logits = distr.log_prob(output_tokens)
@@ -271,7 +392,8 @@ class SignalingGameModule(pl.LightningModule):
                  sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
                  vocab_size=5, noise=0, feedback=False, self_repair=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
-                 log_bosdis_on_validation=False, log_entropy_on_validation=False, **kwargs):
+                 log_bosdis_on_validation=False, log_entropy_on_validation=False,
+                 discrimination_game=False, **kwargs):
         super().__init__()
         if self_repair and feedback:
             raise ValueError("Can't set both self_repair and feedback at the same time!")
@@ -282,6 +404,8 @@ class SignalingGameModule(pl.LightningModule):
 
         self.save_hyperparameters()
         self.params = AttributeDict(self.hparams)
+
+        self.discrimination_game = discrimination_game
 
         self.init_agents()
 
@@ -315,10 +439,14 @@ class SignalingGameModule(pl.LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("model")
+        parser.add_argument("--discrimination-game", default=False, action="store_true")
+        parser.add_argument("--discrimination-num-objects", type=int, default=10)
+        parser.add_argument("--stochastic-receiver", default=False, action="store_true")
+
         parser.add_argument("--symmetric", default=False, action="store_true")
         parser.add_argument("--optimal-sender", default=False, action="store_true")
         parser.add_argument("--load-checkpoint", type=str, default=None)
-        parser.add_argument("--baseline-type", type=str, default="mean")
+        parser.add_argument("--baseline-type", type=str, default="none")
 
         parser.add_argument("--num-attributes", type=int, default=4)
         parser.add_argument("--num-values", type=int, default=4)
@@ -354,9 +482,9 @@ class SignalingGameModule(pl.LightningModule):
 
         parser.add_argument("--reset-parameters", default=False, action="store_true")
         parser.add_argument("--update-masks", default=False, action="store_true")
-        parser.add_argument("--reset-parameters-interval", type=int, default=1000,
+        parser.add_argument("--reset-parameters-interval", type=int, default=1,
                             help="Reset interval (in number of epochs)")
-        parser.add_argument("--reset-parameters-fraction", type=float, default=0.1)
+        parser.add_argument("--reset-parameters-fraction", type=float, default=0.9)
 
         return parent_parser
 
@@ -378,16 +506,29 @@ class SignalingGameModule(pl.LightningModule):
                         for _ in range(self.params.num_senders)
                     ]
                 )
-            self.receivers = ModuleList(
-                [
-                    Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
-                             self.params.receiver_hidden_dim, self.params.max_len,
-                             self.params.num_attributes, self.params.num_values,
-                             self.params.receiver_layer_norm, self.params.receiver_num_layers,
-                             self.params.feedback, self.params.vocab_size_feedback)
-                    for _ in range(self.params.num_receivers)
-                ]
-            )
+            if self.params.discrimination_game:
+                self.receivers = ModuleList(
+                    [
+                        ReceiverDiscrimination(self.params.vocab_size, self.params.receiver_embed_dim,
+                                 self.params.receiver_hidden_dim, self.params.max_len,
+                                 self.params.num_attributes, self.params.num_values,
+                                 self.params.receiver_layer_norm, self.params.receiver_num_layers,
+                                 self.params.feedback, self.params.vocab_size_feedback,
+                                 self.params.discrimination_num_objects, self.params.stochastic_receiver)
+                        for _ in range(self.params.num_receivers)
+                    ]
+                )
+            else:
+                self.receivers = ModuleList(
+                    [
+                        Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
+                                 self.params.receiver_hidden_dim, self.params.max_len,
+                                 self.params.num_attributes, self.params.num_values,
+                                 self.params.receiver_layer_norm, self.params.receiver_num_layers,
+                                 self.params.feedback, self.params.vocab_size_feedback)
+                        for _ in range(self.params.num_receivers)
+                    ]
+                )
 
     def freeze_senders(self):
         for sender in self.senders:
@@ -454,7 +595,13 @@ class SignalingGameModule(pl.LightningModule):
 
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, add_dataloader_idx=False)
 
-    def forward(
+    def forward(self, batch, sender_idx, receiver_idx, return_messages=False, disable_noise=False):
+        if self.discrimination_game:
+            return self.forward_discrimination(batch, sender_idx, receiver_idx, return_messages, disable_noise)
+        else:
+            return self.forward_reconstruction(batch, sender_idx, receiver_idx, return_messages, disable_noise)
+
+    def forward_reconstruction(
         self, sender_input, sender_idx, receiver_idx, return_messages=False, disable_noise=False
     ):
         sender = self.senders[sender_idx]
@@ -522,7 +669,7 @@ class SignalingGameModule(pl.LightningModule):
         sender_entropies = torch.stack(sender_entropies).permute(1, 0)
 
         messages_sender_lengths = find_lengths(messages_sender)
-        self.log(f"message_lengths", messages_sender_lengths.float().mean() - 1)
+        self.log(f"message_lengths", messages_sender_lengths.float().mean())
 
         if self.params.feedback:
             messages_receiver = torch.stack(messages_receiver).permute(1, 0)
@@ -530,12 +677,11 @@ class SignalingGameModule(pl.LightningModule):
             receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
 
             messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
-            self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean() - 1)
+            self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean())
 
         for i in range(messages_sender.size(1)):
             sender_entropies[i >= messages_sender_lengths, i] = 0
             sender_logits[i >= messages_sender_lengths, i] = 0
-            receiver_hidden_states[i >= messages_sender_lengths, i] = 0 # TODO unnecessary
         effective_entropy_s_1 = sender_entropies.sum(dim=1) / messages_sender_lengths.float()
         effective_log_prob_s = sender_logits.sum(dim=1)
 
@@ -602,6 +748,167 @@ class SignalingGameModule(pl.LightningModule):
             return optimized_loss, acc, messages_sender
         else:
             return optimized_loss, acc
+
+    def forward_discrimination(
+        self, batch, sender_idx, receiver_idx, return_messages=False, disable_noise=False
+    ):
+        sender_input, receiver_input, labels = batch
+
+        sender = self.senders[sender_idx]
+        receiver = self.receivers[receiver_idx]
+        batch_size = sender_input.shape[0]
+
+        messages_sender = []
+        original_messages_sender = []
+        sender_logits = []
+        sender_entropies = []
+
+        receiver_entropies = []
+        receiver_hidden_states = torch.zeros((batch_size, self.params.max_len, self.params.receiver_hidden_dim)).type_as(sender_input)
+        messages_receiver = []
+        receiver_logits = []
+
+        sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_first_turn(sender_input)
+        sender_entropies.append(sender_step_entropy)
+        sender_logits.append(sender_step_logits)
+        original_messages_sender.append(sender_output_tokens)
+
+        sender_output_tokens_detached = sender_output_tokens.detach().clone()
+        sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
+        messages_sender.append(sender_output_tokens_detached)
+
+        receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(receiver_input,
+            sender_output_tokens_detached)
+        receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
+        if self.params.feedback:
+            receiver_entropies.append(receiver_step_entropy)
+            receiver_logits.append(receiver_step_logits)
+            input_feedback = receiver_output_tokens.detach()
+            messages_receiver.append(receiver_output_tokens)
+        elif self.params.self_repair:
+            input_feedback = (sender_output_tokens_detached == self.token_noise).long()
+        else:
+            input_feedback = None
+
+        for step in range(1, self.params.max_len):
+            sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_feedback)
+
+            sender_entropies.append(sender_step_entropy)
+            sender_logits.append(sender_step_logits)
+            original_messages_sender.append(sender_output_tokens)
+
+            sender_output_tokens_detached = sender_output_tokens.detach().clone()
+            sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
+            messages_sender.append(sender_output_tokens_detached)
+
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward(
+                receiver_input, sender_output_tokens_detached, receiver_prev_hidden)
+            receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
+            if self.params.feedback:
+                receiver_entropies.append(receiver_step_entropy)
+                receiver_logits.append(receiver_step_logits)
+                messages_receiver.append(receiver_output_tokens)
+
+                input_feedback = receiver_output_tokens.detach()
+
+            elif self.params.self_repair:
+                input_feedback = (sender_output_tokens_detached == self.token_noise).long()
+
+        messages_sender = torch.stack(messages_sender).permute(1, 0)
+        sender_logits = torch.stack(sender_logits).permute(1, 0)
+        sender_entropies = torch.stack(sender_entropies).permute(1, 0)
+
+        messages_sender_lengths = find_lengths(messages_sender)
+        self.log(f"message_lengths", messages_sender_lengths.float().mean())
+
+        if self.params.feedback:
+            messages_receiver = torch.stack(messages_receiver).permute(1, 0)
+            receiver_logits = torch.stack(receiver_logits).permute(1, 0)
+            receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
+
+            messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
+            self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean())
+
+        for i in range(messages_sender.size(1)):
+            sender_entropies[i >= messages_sender_lengths, i] = 0
+            sender_logits[i >= messages_sender_lengths, i] = 0
+
+        effective_entropy_s_1 = sender_entropies.sum(dim=1) / messages_sender_lengths.float()
+        effective_log_prob_s = sender_logits.sum(dim=1)
+
+        sender_entropy_loss = effective_entropy_s_1 * self.sender_entropy_coeff
+
+        length_baseline = self.baselines["length_sender"].predict(messages_sender_lengths.device)
+        policy_length_loss = (messages_sender_lengths.float() - length_baseline) * self.length_cost * effective_log_prob_s
+
+        loss_baseline = self.baselines["loss"].predict(sender_input.device)
+
+        if self.params.stochastic_receiver:
+            receiver_output, receiver_output_entropies, receiver_output_logits = receiver.output(receiver_input, receiver_hidden_states, messages_sender_lengths)
+            rewards = (receiver_output == labels).detach().float()
+
+            #TODO: reward per-attribute?
+            # receiver_predicted_objects = receiver_input[range(batch_size), receiver_output]
+            # receiver_predicted_objects = receiver_predicted_objects.view(batch_size, self.num_attributes, self.num_values)
+            # sender_input = sender_input.view(batch_size, self.num_attributes, self.num_values)
+            # rewards = torch.mean((receiver_predicted_objects.argmax(dim=-1) == sender_input.argmax(dim=-1)).float(), dim=1)
+
+            receiver_policy_loss = (
+                    (- rewards.detach() - loss_baseline) * receiver_output_logits
+            )
+            receiver_entropy_loss = receiver_output_entropies * self.receiver_entropy_coeff
+
+            receiver_loss = receiver_policy_loss - receiver_entropy_loss
+        else:
+            receiver_output = receiver.output(receiver_input, receiver_hidden_states, messages_sender_lengths)
+            rewards = (receiver_output.argmax(dim=1) == labels).detach().float()
+            receiver_loss = F.cross_entropy(receiver_output, labels, reduction="none")
+
+
+        self.log(f"receiver_loss", receiver_loss.mean())
+        assert len(receiver_loss) == batch_size
+
+        if self.params.feedback:
+            # TODO: does not work with current messages_receiver_lengths (as they ignore eos tokens)
+            # for i in range(messages_receiver.size(1)):
+            #     receiver_entropies[i >= messages_receiver_lengths, i] = 0
+            #     receiver_logits[i >= messages_receiver_lengths, i] = 0
+            effective_entropy_r = receiver_entropies.sum(dim=1) / messages_receiver_lengths.float()
+
+            receiver_entropy_loss_2 = effective_entropy_r * self.receiver_entropy_coeff
+
+            if self.params.stochastic_receiver:
+                receiver_policy_loss_2 = (
+                        (- rewards.detach() - loss_baseline) * receiver_logits
+                )
+                receiver_loss += receiver_policy_loss_2
+
+            receiver_loss -= receiver_entropy_loss_2
+
+        self.log(f"entropy_loss", sender_entropy_loss.mean())
+
+        sender_policy_loss = (
+            (- rewards.detach() - loss_baseline) * effective_log_prob_s
+        )
+
+        self.log(f"sender_policy_loss", sender_policy_loss.mean())
+        self.log(f"sender_policy_length_loss", policy_length_loss.mean())
+
+        sender_loss = policy_length_loss + sender_policy_loss - sender_entropy_loss
+
+        loss = sender_loss.mean() + receiver_loss.mean()
+
+        if self.training:
+            self.baselines["loss"].update(-rewards)
+            self.baselines["length_sender"].update(messages_sender_lengths.float())
+            # TODO
+            # if self.params.feedback:
+            #     self.baselines["length_receiver"].update(messages_receiver_lengths.float())
+
+        if return_messages:
+            return loss, rewards, messages_sender
+        else:
+            return loss, rewards
 
     def add_noise(self, messages, disable_noise=False):
         if not disable_noise and self.params.noise > 0:
@@ -713,7 +1020,10 @@ class SignalingGameModule(pl.LightningModule):
         if is_best_checkpoint:
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
 
-        meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
+        if self.discrimination_game:
+            meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
+        else:
+            meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
         self.analyze_language(messages, meanings, is_best_checkpoint)
 
@@ -721,14 +1031,22 @@ class SignalingGameModule(pl.LightningModule):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
+        if self.discrimination_game:
+            # TODO msgs depend on feedback!
+            unique_meanings, indices = torch.unique(meanings, dim=0, return_inverse=True)
+            unique_messages = []
+            for i in range(len(unique_meanings)):
+                unique_messages.append(messages[indices == i][0])
+            messages = torch.stack(unique_messages)
+            meanings = unique_meanings
         # TODO: command line arg:
-        if is_best_checkpoint or self.force_log:
-            meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
-            num_digits = int(math.log10(self.params.vocab_size))
-            messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
-            messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
-            messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
-            messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
+        # if is_best_checkpoint or self.force_log:
+            # meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+            # num_digits = int(math.log10(self.params.vocab_size))
+            # messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
+            # messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
+            # messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
+            # messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
         if self.params.log_entropy_on_validation or self.force_log:
             entropy = compute_entropy(messages.numpy())

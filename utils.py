@@ -8,8 +8,8 @@ class NoBaseline():
     def update(self, loss: torch.Tensor) -> None:
         pass
 
-    def predict(self, loss: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(1, device=loss.device)
+    def predict(self, device) -> torch.Tensor:
+        return torch.zeros(1, device=device)
 
 
 class MeanBaseline():

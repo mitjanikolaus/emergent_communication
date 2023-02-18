@@ -1,5 +1,4 @@
 import argparse
-import os
 import pickle
 
 from pytorch_lightning import seed_everything, Trainer
@@ -17,7 +16,7 @@ def run(config):
     checkpoint_callback_2 = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True,
                                           filename="{epoch:02d}-{val_acc_no_noise:.2f}")
     early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=config.patience, verbose=True, mode="max",
-                                        min_delta=0.01, stopping_threshold=0.99)
+                                        min_delta=0.01, stopping_threshold=config.stopping_threshold)
 
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
                                          num_values=config.num_values,
@@ -25,7 +24,9 @@ def run(config):
                                          test_set_size=config.test_set_size,
                                          batch_size=config.batch_size,
                                          num_workers=config.num_workers,
-                                         seed=config.seed)
+                                         seed=config.seed,
+                                         discrimination_game=config.discrimination_game,
+                                         num_objects=config.discrimination_num_objects)
 
     checkpoint = config.load_checkpoint
 
@@ -73,6 +74,7 @@ def get_args():
                         check_val_every_n_epoch=100,
                         log_every_steps=1000,
                         num_sanity_val_steps=3,
+                        limit_val_batches=100,
                         max_time="00:46:00:00", # Default max time: 46 hours
                         )
 
@@ -80,10 +82,11 @@ def get_args():
     # These args have to be added manually as they're not part of the model args
     parser.add_argument("--seed", type=int, default="1")
     parser.add_argument("--max-num-objects", type=int, default="100000")
-    parser.add_argument("--batch-size", type=int, default="1024")
+    parser.add_argument("--batch-size", type=int, default="1000")
     parser.add_argument("--test-set-size", type=float, default=0.1)
     parser.add_argument("--num-workers", type=int, default="0")
     parser.add_argument("--patience", type=int, default=50)
+    parser.add_argument("--stopping-threshold", type=float, default=0.99)
 
     return parser.parse_args()
 
