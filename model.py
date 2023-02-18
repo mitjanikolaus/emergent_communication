@@ -881,6 +881,7 @@ class SignalingGameModule(pl.LightningModule):
             receiver_entropy_loss_2 = effective_entropy_r * self.receiver_entropy_coeff
 
             if self.params.stochastic_receiver:
+                receiver_logits = receiver_logits.sum(dim=1)
                 receiver_policy_loss_2 = (
                         (- rewards.detach() - loss_baseline) * receiver_logits
                 )
