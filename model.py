@@ -15,6 +15,9 @@ from language_analysis import compute_topsim, compute_entropy, compute_posdis, c
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
+MAX_SAMPLES_LANGUAGE_ANALYSIS = 1000
+
+
 class LayerNormGRUCell(nn.Module):
     def __init__(self, input_size, hidden_size, bias=True):
         super(LayerNormGRUCell, self).__init__()
@@ -1034,11 +1037,15 @@ class SignalingGameModule(pl.LightningModule):
         if self.discrimination_game:
             # TODO msgs depend on feedback!
             unique_meanings, indices = torch.unique(meanings, dim=0, return_inverse=True)
+            unique_meanings = unique_meanings[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
             unique_messages = []
             for i in range(len(unique_meanings)):
                 unique_messages.append(messages[indices == i][0])
             messages = torch.stack(unique_messages)
             meanings = unique_meanings
+        else:
+            meanings = meanings[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
+            messages = messages[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
         # TODO: command line arg:
         # if is_best_checkpoint or self.force_log:
             # meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
