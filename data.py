@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 
 class SignalingGameDataModule(pl.LightningDataModule):
     def __init__(self, num_attributes, num_values, max_num_objects, test_set_size, batch_size, num_workers, seed,
-                 discrimination_game=False, num_objects=10):
+                 discrimination_game=False, num_objects=10, uninformative_attributes=False):
         super().__init__()
         self.num_attributes = num_attributes
         self.num_values = num_values
@@ -33,9 +33,9 @@ class SignalingGameDataModule(pl.LightningDataModule):
         print(f"Num objects in test: ", len(objects_test))
 
         if self.discrimination_game:
-            self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects)
-            self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects)
-            self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects)
+            self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects, num_attributes, num_values, uninformative_attributes)
+            self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects, num_attributes, num_values, uninformative_attributes)
+            self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects, num_attributes, num_values, uninformative_attributes)
         else:
             self.train_dataset = SignalingGameDataset(objects_train)
             self.val_dataset = SignalingGameDataset(objects_val)
@@ -91,15 +91,26 @@ class SignalingGameDataset(Dataset):
 
 class SignalingGameDiscriminationDataset(IterableDataset):
 
-    def __init__(self, objects, num_objects, max_samples):
+    def __init__(self, objects, num_objects, max_samples, num_attributes, num_values, uninformative_attributes=False):
         self.num_objects = num_objects
         self.objects = objects
         self.max_samples = max_samples
+        self.num_attributes = num_attributes
+        self.num_values = num_values
+        self.uninformative_attributes = uninformative_attributes
 
     def get_sample(self):
         target_position = random.choice(range(self.num_objects))
         label = target_position
-        candidate_objects = random.sample(self.objects, self.num_objects)
+        if self.uninformative_attributes:
+            uninformative_features = random.sample(range(self.num_attributes), k=1)
+            values = random.choices(range(self.num_values), k=1)
+            filtered_objects = self.objects
+            for i in range(len(uninformative_features)):
+                filtered_objects = [o for o in filtered_objects if o[uninformative_features[i]*self.num_values + values[i]] == 1]
+            candidate_objects = random.sample(filtered_objects, self.num_objects)
+        else:
+            candidate_objects = random.sample(self.objects, self.num_objects)
         receiver_input = torch.stack(candidate_objects)
         sender_object = receiver_input[target_position]
 

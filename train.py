@@ -26,7 +26,8 @@ def run(config):
                                          num_workers=config.num_workers,
                                          seed=config.seed,
                                          discrimination_game=config.discrimination_game,
-                                         num_objects=config.discrimination_num_objects)
+                                         num_objects=config.discrimination_num_objects,
+                                         uninformative_attributes=config.uninformative_attributes)
 
     checkpoint = config.load_checkpoint
 
