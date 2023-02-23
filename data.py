@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
@@ -58,7 +59,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
 
 def generate_objects(num_attributes, num_values, max_num_objects):
     samples = set()
-    if num_values**num_attributes < max_num_objects:
+    if num_values**num_attributes <= max_num_objects:
         inputs = itertools.product(range(num_values), repeat=num_attributes)
         for input in inputs:
             z = torch.zeros((num_attributes, num_values))
@@ -99,15 +100,25 @@ class SignalingGameDiscriminationDataset(IterableDataset):
         self.num_values = num_values
         self.uninformative_attributes = uninformative_attributes
 
+        self.candidate_combinations = []
+        if self.uninformative_attributes:
+            for i_1, j_1 in tqdm(list(itertools.product(range(self.num_attributes), range(self.num_values)))):
+                filtered_objects = [o for o in self.objects if(o[i_1*self.num_values + j_1] == 1)]
+                if len(filtered_objects) >= self.num_objects:
+                    for i_2, j_2 in itertools.product(range(self.num_attributes), range(self.num_values)):
+                        if not ((i_1 == i_2) and (j_1 == j_2)):
+                            filtered_objects_2 = [o for o in filtered_objects if (o[i_2*self.num_values + j_2] == 1)]
+                            if len(filtered_objects_2) >= self.num_objects:
+                                self.candidate_combinations.append((i_1, j_1, i_2, j_2))
+            print(f"num objects: {len(self.objects)} | num candidate combinations: {len(self.candidate_combinations)}")
+
     def get_sample(self):
         target_position = random.choice(range(self.num_objects))
         label = target_position
         if self.uninformative_attributes:
-            uninformative_features = random.sample(range(self.num_attributes), k=1)
-            values = random.choices(range(self.num_values), k=1)
-            filtered_objects = self.objects
-            for i in range(len(uninformative_features)):
-                filtered_objects = [o for o in filtered_objects if o[uninformative_features[i]*self.num_values + values[i]] == 1]
+            (i_1, j_1, i_2, j_2) = random.choice(self.candidate_combinations)
+            filtered_objects = [o for o in self.objects if
+                                (o[i_1 * self.num_values + j_1] == 1) and (o[i_2 * self.num_values + j_2] == 1)]
             candidate_objects = random.sample(filtered_objects, self.num_objects)
         else:
             candidate_objects = random.sample(self.objects, self.num_objects)
