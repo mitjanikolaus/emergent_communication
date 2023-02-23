@@ -109,16 +109,15 @@ class SignalingGameDiscriminationDataset(IterableDataset):
                         if not ((i_1 == i_2) and (j_1 == j_2)):
                             filtered_objects_2 = [o for o in filtered_objects if (o[i_2*self.num_values + j_2] == 1)]
                             if len(filtered_objects_2) >= self.num_objects:
-                                self.candidate_combinations.append((i_1, j_1, i_2, j_2))
+                                self.candidate_combinations.append(filtered_objects_2)
+
             print(f"num objects: {len(self.objects)} | num candidate combinations: {len(self.candidate_combinations)}")
 
     def get_sample(self):
         target_position = random.choice(range(self.num_objects))
         label = target_position
         if self.uninformative_attributes:
-            (i_1, j_1, i_2, j_2) = random.choice(self.candidate_combinations)
-            filtered_objects = [o for o in self.objects if
-                                (o[i_1 * self.num_values + j_1] == 1) and (o[i_2 * self.num_values + j_2] == 1)]
+            filtered_objects = random.choice(self.candidate_combinations)
             candidate_objects = random.sample(filtered_objects, self.num_objects)
         else:
             candidate_objects = random.sample(self.objects, self.num_objects)
