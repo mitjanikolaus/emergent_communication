@@ -187,7 +187,8 @@ class ReceiverDiscrimination(nn.Module):
 
         rnn_input_size = embed_dim
         if self.feedback:
-            rnn_input_size = embed_dim*(1+self.num_objects)
+            rnn_input_size = embed_dim*2
+
         self.cells = nn.ModuleList(
             [
                 rnn_cell(input_size=rnn_input_size, hidden_size=hidden_size)
@@ -226,7 +227,8 @@ class ReceiverDiscrimination(nn.Module):
 
         if self.feedback:
             embedded_objects = self.linear_objects_in(candidate_objects)
-            rnn_input = torch.cat((embedded_messages, embedded_objects.reshape(batch_size, -1)), dim=-1)
+            embedded_objects_avg = torch.mean(embedded_objects, dim=1)
+            rnn_input = torch.cat((embedded_messages, embedded_objects_avg), dim=-1)
 
         for i, layer in enumerate(self.cells):
             h_t = layer(rnn_input, prev_hidden[i])
