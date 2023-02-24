@@ -100,31 +100,30 @@ class SignalingGameDiscriminationDataset(IterableDataset):
         self.num_values = num_values
         self.uninformative_attributes = uninformative_attributes
 
-        if self.uninformative_attributes:
-            self.candidate_objects = []
-            for obj in tqdm(self.objects):
-                self.candidate_objects.append(self.get_objs_with_max_similarities(obj))
-
-    def get_objs_with_max_similarities(self, target_object):
-        objs_with_similarities = []
-        for obj in self.objects:
-            similarity = torch.sum(obj + target_object == 2).item()
-            objs_with_similarities.append((similarity, obj))
-
-        objs_with_similarities.sort(key=lambda x: x[0], reverse=True)
-
-        # Remove target item:
-        objs_with_similarities = objs_with_similarities[1:]
-
-        return [s[1] for s in objs_with_similarities[:self.num_objects]]
-
     def get_sample(self):
         target_position = random.choice(range(self.num_objects))
         label = target_position
         if self.uninformative_attributes:
-            target_idx = random.choice(range(len(self.objects)))
-            target_object = self.objects[target_idx]
-            candidate_objects = self.candidate_objects[target_idx]
+            target_object = random.choice(self.objects)
+            candidate_objects = []
+            while len(candidate_objects) < self.num_objects:
+                attrs_uninformative = random.sample(range(self.num_attributes), k=self.num_attributes - 1)
+                distractor = torch.zeros((self.num_attributes, self.num_values))
+                for attr in range(self.num_attributes):
+                    if attr in attrs_uninformative:
+                        # Take the target objects value
+                        val = torch.nonzero(target_object[attr * self.num_values:(attr + 1) * self.num_values])[0]
+                    else:
+                        val = random.choice(range(self.num_values))
+                        # Ensure that the value is different from the target objects value
+                        while val == torch.nonzero(target_object[attr * self.num_values:(attr + 1) * self.num_values])[0].item():
+                            val = random.choice(range(self.num_values))
+
+                    distractor[attr, val] = 1
+
+                distractor = distractor.view(-1)
+                candidate_objects.append(distractor)
+
             candidate_objects[target_position] = target_object
         else:
             candidate_objects = random.sample(self.objects, self.num_objects)
