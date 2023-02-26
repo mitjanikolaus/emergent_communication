@@ -258,6 +258,7 @@ class ReceiverDiscrimination(nn.Module):
 
         embedded_objects = self.linear_objects_2(candidate_objects)
 
+        # TODO: attention over hidden states?
         hidden_states_last_token = hidden_states[range(batch_size), message_lengths - 1]
 
         hidden_states_last_token = self.hidden_to_objects_mul(hidden_states_last_token)
@@ -446,7 +447,7 @@ class SignalingGameModule(pl.LightningModule):
         parser = parent_parser.add_argument_group("model")
         parser.add_argument("--discrimination-game", default=False, action="store_true")
         parser.add_argument("--discrimination-num-objects", type=int, default=10)
-        parser.add_argument("--uninformative-attributes", default=False, action="store_true")
+        parser.add_argument("--hard-distractors", default=False, action="store_true")
         parser.add_argument("--stochastic-receiver", default=False, action="store_true")
 
         parser.add_argument("--symmetric", default=False, action="store_true")
