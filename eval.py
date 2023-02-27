@@ -8,15 +8,12 @@ from pytorch_lightning import seed_everything
 from data import SignalingGameDataModule
 from model import SignalingGameModule
 
-
-def find_best_checkpoint(run_folder):
+def find_best_checkpoint(run_folder, metric="val_acc"):
     checkpoints_folder = os.path.join(run_folder, "checkpoints")
 
     ckpt_files = os.listdir(checkpoints_folder)
-    best_checkpoints = [ckpt for ckpt in ckpt_files if not ckpt == "last.ckpt"]
-    # TODO for now returning the first checkpoint found
-    # accs = [int(filename[6:-5]) for filename in ckpt_files]
-    # print(max(epochs))
+    ckpt_files = [ckpt for ckpt in ckpt_files if ckpt.endswith(".ckpt")]
+    best_checkpoints = [ckpt for ckpt in ckpt_files if f"-{metric}=" in ckpt]
     if len(best_checkpoints) == 0:
         raise FileNotFoundError
     assert len(best_checkpoints) == 1
@@ -37,7 +34,10 @@ def run(args):
                                          test_set_size=config.test_set_size,
                                          batch_size=config.batch_size,
                                          num_workers=config.num_workers,
-                                         seed=config.seed)
+                                         seed=config.seed,
+                                         discrimination_game=config.discrimination_game,
+                                         num_objects=config.discrimination_num_objects,
+                                         hard_distractors=args.hard_distractors)
 
     if torch.cuda.is_available():
         config["gpus"] = 1
@@ -52,6 +52,7 @@ def run(args):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=str, required=True)
+    parser.add_argument("--hard-distractors", default=False, action="store_true")
 
     return parser.parse_args()
 
