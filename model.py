@@ -860,12 +860,6 @@ class SignalingGameModule(pl.LightningModule):
             receiver_output, receiver_output_entropies, receiver_output_logits = receiver.output(receiver_input, receiver_hidden_states, messages_sender_lengths)
             rewards = (receiver_output == labels).detach().float()
 
-            #TODO: reward per-attribute?
-            # receiver_predicted_objects = receiver_input[range(batch_size), receiver_output]
-            # receiver_predicted_objects = receiver_predicted_objects.view(batch_size, self.num_attributes, self.num_values)
-            # sender_input = sender_input.view(batch_size, self.num_attributes, self.num_values)
-            # rewards = torch.mean((receiver_predicted_objects.argmax(dim=-1) == sender_input.argmax(dim=-1)).float(), dim=1)
-
             receiver_policy_loss = (
                     (- rewards.detach() - loss_baseline) * receiver_output_logits
             )
