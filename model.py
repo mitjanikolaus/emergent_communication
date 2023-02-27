@@ -199,6 +199,8 @@ class ReceiverDiscrimination(nn.Module):
         )
 
         self.linear_objects_2 = nn.Linear(n_attributes * n_values, hidden_size)
+
+        self.attn = nn.Linear(hidden_size, max_len * hidden_size)
         self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
@@ -220,12 +222,11 @@ class ReceiverDiscrimination(nn.Module):
         return self.forward(candidate_objects, messages, prev_hidden)
 
     def forward(self, candidate_objects, messages, prev_hidden):
-        batch_size = messages.shape[0]
-
         embedded_messages = self.embedding(messages)
         rnn_input = embedded_messages
 
         if self.feedback:
+            # TODO: self attention instead of avg?
             embedded_objects = self.linear_objects_in(candidate_objects)
             embedded_objects_avg = torch.mean(embedded_objects, dim=1)
             rnn_input = torch.cat((embedded_messages, embedded_objects_avg), dim=-1)
@@ -258,12 +259,17 @@ class ReceiverDiscrimination(nn.Module):
 
         embedded_objects = self.linear_objects_2(candidate_objects)
 
-        # TODO: attention over hidden states?
-        hidden_states_last_token = hidden_states[range(batch_size), message_lengths - 1]
+        hidden_states = self.hidden_to_objects_mul(hidden_states)
 
-        hidden_states_last_token = self.hidden_to_objects_mul(hidden_states_last_token)
+        for i in range(self.max_len):
+            hidden_states[i >= message_lengths, i] = 0
 
-        output = torch.matmul(embedded_objects, hidden_states_last_token.unsqueeze(2))
+        hidden_states_summary = torch.mean(hidden_states, dim=1)
+        attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
+
+        hidden_states_weighted = torch.sum(hidden_states * attn_weights, dim=1)
+
+        output = torch.matmul(embedded_objects, hidden_states_weighted.unsqueeze(2))
 
         output = output.squeeze()
 
