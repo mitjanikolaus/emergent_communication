@@ -20,6 +20,8 @@ H5_IDS_KEY = "ids"
 MAX_NUM_OBJECTS = 10
 IMG_FEATS_DIM = 2048
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def show_image(
     img_data,
@@ -79,6 +81,7 @@ if __name__ == '__main__':
             model = nn.Sequential(*modules)
             for p in model.parameters():
                 p.requires_grad = False
+            model = model.to(device)
 
             normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                              std=[0.229, 0.224, 0.225])
@@ -124,9 +127,9 @@ if __name__ == '__main__':
                 images = [img] + cropped_objects
                 images = [preprocessing(img) for img in images]
 
-                images = torch.stack(images)
+                images = torch.stack(images).to(device)
 
-                feats = model(images).squeeze().numpy()
+                feats = model(images).squeeze().detach().numpy()
 
                 h5_features = h5_db.create_dataset(sample.id, (len(images), IMG_FEATS_DIM), dtype=np.float32)
 
