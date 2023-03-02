@@ -1,16 +1,20 @@
 import itertools
+import os
 import random
 
+import h5py
 import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
+from extract_guesswhat_features import DATA_DIR, H5_IDS_KEY, MAX_NUM_OBJECTS
+
 
 class SignalingGameDataModule(pl.LightningDataModule):
     def __init__(self, num_attributes, num_values, max_num_objects, test_set_size, batch_size, num_workers, seed,
-                 discrimination_game=False, num_objects=10, hard_distractors=False):
+                 discrimination_game=False, num_objects=10, hard_distractors=False, guesswhat=False):
         super().__init__()
         self.num_attributes = num_attributes
         self.num_values = num_values
@@ -33,14 +37,23 @@ class SignalingGameDataModule(pl.LightningDataModule):
         print(f"Num objects in val: ", len(objects_val))
         print(f"Num objects in test: ", len(objects_test))
 
-        if self.discrimination_game:
-            self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
-            self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
-            self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
+        if guesswhat:
+            self.train_dataset = SignalingGameGuessWhatDataset("train_features.hdf5")
+            val_dataset_file = "validation_features.hdf5"
+            if test_set_size <= 0:
+                val_dataset_file = "train_features.hdf5"
+            self.val_dataset = SignalingGameGuessWhatDataset(val_dataset_file)
+            self.test_dataset = None
+
         else:
-            self.train_dataset = SignalingGameDataset(objects_train)
-            self.val_dataset = SignalingGameDataset(objects_val)
-            self.test_dataset = SignalingGameDataset(objects_test)
+            if self.discrimination_game:
+                self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
+                self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
+                self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
+            else:
+                self.train_dataset = SignalingGameDataset(objects_train)
+                self.val_dataset = SignalingGameDataset(objects_val)
+                self.test_dataset = SignalingGameDataset(objects_test)
 
     def train_dataloader(self):
         shuffle = True
@@ -51,10 +64,15 @@ class SignalingGameDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
                                                num_workers=self.num_workers)
-        test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
         language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
                                                   num_workers=self.num_workers)
-        return validation_dataloader, test_dataloader, language_analysis_dataloader
+        if self.test_dataset:
+            test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+
+            return validation_dataloader, language_analysis_dataloader, test_dataloader
+        else:
+            return validation_dataloader, language_analysis_dataloader
+
 
 
 def generate_objects(num_attributes, num_values, max_num_objects):
@@ -88,6 +106,39 @@ class SignalingGameDataset(Dataset):
 
     def __len__(self):
         return len(self.objects)
+
+
+class SignalingGameGuessWhatDataset(Dataset):
+
+    def __init__(self, file_name):
+        self.file_name = file_name
+
+        self.h5_db = h5py.File(os.path.join(DATA_DIR, self.file_name), 'r')
+        self.h5_ids = self.h5_db[H5_IDS_KEY]
+
+    def __len__(self):
+        return len(self.h5_ids)
+
+    def __getitem__(self, index):
+        candidate_objects = self.h5_db[self.h5_ids[index]]
+
+        # Discard first image (scene overview)
+        candidate_objects = candidate_objects[1:]
+
+        random.shuffle(candidate_objects)
+
+        target_position = random.choice(range(len(candidate_objects)))
+        label = target_position
+
+        candidate_objects = [torch.tensor(o) for o in candidate_objects]
+
+        # Pad with 0 objects
+        candidate_objects += [torch.zeros_like(candidate_objects[0])] * (MAX_NUM_OBJECTS - len(candidate_objects))
+
+        receiver_input = torch.stack(candidate_objects)
+        sender_object = receiver_input[target_position]
+
+        return sender_object, receiver_input, label
 
 
 class SignalingGameDiscriminationDataset(IterableDataset):

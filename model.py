@@ -12,6 +12,7 @@ import pytorch_lightning as pl
 from torch.nn import ModuleList, GRUCell
 
 from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
+from extract_guesswhat_features import IMG_FEATS_DIM
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
@@ -71,7 +72,7 @@ class LayerNormGRUCell(nn.Module):
 
 class Receiver(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, layer_norm, num_layers,
+            self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
             feedback, vocab_size_feedback
     ):
         super(Receiver, self).__init__()
@@ -103,7 +104,7 @@ class Receiver(nn.Module):
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size_feedback)
 
-        self.linear_out = nn.Linear(hidden_size, n_attributes * n_values)
+        self.linear_out = nn.Linear(hidden_size, input_size)
 
         self.feedback = feedback
 
@@ -159,7 +160,7 @@ class Receiver(nn.Module):
 
 class ReceiverDiscrimination(nn.Module):
     def __init__(
-            self, vocab_size, embed_dim, hidden_size, max_len, n_attributes, n_values, layer_norm, num_layers,
+            self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
             feedback, vocab_size_feedback, num_objects, stochastic
     ):
         super(ReceiverDiscrimination, self).__init__()
@@ -170,7 +171,7 @@ class ReceiverDiscrimination(nn.Module):
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
         self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
-        self.linear_objects_in = nn.Linear(n_attributes * n_values, embed_dim)
+        self.linear_objects_in = nn.Linear(input_size, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -198,7 +199,7 @@ class ReceiverDiscrimination(nn.Module):
             ]
         )
 
-        self.linear_objects_2 = nn.Linear(n_attributes * n_values, hidden_size)
+        self.linear_objects_2 = nn.Linear(input_size, hidden_size)
 
         self.attn = nn.Linear(hidden_size, max_len * hidden_size)
         self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
@@ -292,8 +293,7 @@ class ReceiverDiscrimination(nn.Module):
 class Sender(pl.LightningModule):
     def __init__(
         self,
-        n_attributes,
-        n_values,
+        input_size,
         vocab_size,
         embed_dim,
         hidden_size,
@@ -309,7 +309,7 @@ class Sender(pl.LightningModule):
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
-        self.linear_in_objects = nn.Linear(n_attributes * n_values, hidden_size)
+        self.linear_in_objects = nn.Linear(input_size, hidden_size)
 
         self.feedback = feedback
         if self.feedback:
@@ -405,7 +405,7 @@ class SignalingGameModule(pl.LightningModule):
                  vocab_size=5, noise=0, feedback=False, self_repair=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False,
-                 discrimination_game=False, **kwargs):
+                 discrimination_game=False, guesswhat=False, **kwargs):
         super().__init__()
         if self_repair and feedback:
             raise ValueError("Can't set both self_repair and feedback at the same time!")
@@ -414,10 +414,15 @@ class SignalingGameModule(pl.LightningModule):
             print("Self-repair mode, setting vocab_size_feedback to 2!")
             vocab_size_feedback = 2
 
+        self.input_size = num_attributes * num_values
+        if guesswhat:
+            self.input_size = IMG_FEATS_DIM
+
         self.save_hyperparameters()
         self.params = AttributeDict(self.hparams)
 
         self.discrimination_game = discrimination_game
+        self.guesswhat = guesswhat
 
         self.init_agents()
 
@@ -454,7 +459,10 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--discrimination-game", default=False, action="store_true")
         parser.add_argument("--discrimination-num-objects", type=int, default=10)
         parser.add_argument("--hard-distractors", default=False, action="store_true")
+
         parser.add_argument("--stochastic-receiver", default=False, action="store_true")
+
+        parser.add_argument("--guesswhat", default=False, action="store_true")
 
         parser.add_argument("--symmetric", default=False, action="store_true")
         parser.add_argument("--optimal-sender", default=False, action="store_true")
@@ -511,7 +519,7 @@ class SignalingGameModule(pl.LightningModule):
                 self.senders = ModuleList(
                     [
                         Sender(
-                               self.params.num_attributes, self.params.num_values,
+                               self.input_size,
                                self.params.vocab_size, self.params.sender_embed_dim,
                                self.params.sender_hidden_dim, self.params.max_len,
                                self.params.sender_layer_norm, self.params.sender_num_layers,
@@ -519,12 +527,12 @@ class SignalingGameModule(pl.LightningModule):
                         for _ in range(self.params.num_senders)
                     ]
                 )
-            if self.params.discrimination_game:
+            if self.params.discrimination_game or self.params.guesswhat:
                 self.receivers = ModuleList(
                     [
                         ReceiverDiscrimination(self.params.vocab_size, self.params.receiver_embed_dim,
                                  self.params.receiver_hidden_dim, self.params.max_len,
-                                 self.params.num_attributes, self.params.num_values,
+                                 self.input_size,
                                  self.params.receiver_layer_norm, self.params.receiver_num_layers,
                                  self.params.feedback, self.params.vocab_size_feedback,
                                  self.params.discrimination_num_objects, self.params.stochastic_receiver)
@@ -536,7 +544,7 @@ class SignalingGameModule(pl.LightningModule):
                     [
                         Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
                                  self.params.receiver_hidden_dim, self.params.max_len,
-                                 self.params.num_attributes, self.params.num_values,
+                                 self.input_size,
                                  self.params.receiver_layer_norm, self.params.receiver_num_layers,
                                  self.params.feedback, self.params.vocab_size_feedback)
                         for _ in range(self.params.num_receivers)
@@ -609,7 +617,7 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, add_dataloader_idx=False)
 
     def forward(self, batch, sender_idx, receiver_idx, return_messages=False, disable_noise=False):
-        if self.discrimination_game:
+        if self.discrimination_game or self.guesswhat:
             return self.forward_discrimination(batch, sender_idx, receiver_idx, return_messages, disable_noise)
         else:
             return self.forward_reconstruction(batch, sender_idx, receiver_idx, return_messages, disable_noise)
@@ -981,23 +989,29 @@ class SignalingGameModule(pl.LightningModule):
         if dataloader_idx == 0:
             # Val Generalization
             _, acc = self.forward(sender_input, sender_idx, receiver_idx)
-            _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
+            if self.params.noise > 0:
+                _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
+            else:
+                acc_no_noise = acc
 
             return acc, acc_no_noise
 
         elif dataloader_idx == 1:
-            # Test Generalization
-            _, acc = self.forward(sender_input, sender_idx, receiver_idx)
-            _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
-
-            return acc, acc_no_noise
-
-        elif dataloader_idx == 2:
             # Language analysis (on train set data)
             # TODO: do only if required for logging
             _, acc_no_noise, messages = self.forward(sender_input, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
 
             return sender_input, messages, acc_no_noise
+
+        elif dataloader_idx == 2:
+            # Test Generalization
+            _, acc = self.forward(sender_input, sender_idx, receiver_idx)
+            if self.params.noise > 0:
+                _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
+            else:
+                acc_no_noise = acc
+
+            return acc, acc_no_noise
 
     def validation_epoch_end(self, validation_step_outputs):
         # Val Generalization:
@@ -1013,27 +1027,28 @@ class SignalingGameModule(pl.LightningModule):
             is_best_checkpoint = True
         self.log("best_val_acc_no_noise", self.best_val_acc_no_noise, prog_bar=True, add_dataloader_idx=False)
 
-        # Test Generalization:
-        accs = torch.cat([acc for acc, _ in validation_step_outputs[1]])
-        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[1]])
-        test_acc = accs.float().mean().item()
-        test_acc_no_noise = accs_no_noise.float().mean().item()
-        self.log("test_acc", test_acc, add_dataloader_idx=False)
-        self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
-
         # Language analysis (on train set data)
-        language_analysis_results = validation_step_outputs[2]
+        language_analysis_results = validation_step_outputs[1]
         train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
         self.log("train_acc_no_noise", train_acc_no_noise.float(), prog_bar=True, add_dataloader_idx=False)
         if is_best_checkpoint:
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
 
-        if self.discrimination_game:
+        if self.discrimination_game or self.guesswhat:
             meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
         else:
             meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
         self.analyze_language(messages, meanings, is_best_checkpoint)
+
+        if len(validation_step_outputs) > 2:
+            # Test Generalization:
+            accs = torch.cat([acc for acc, _ in validation_step_outputs[2]])
+            accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[2]])
+            test_acc = accs.float().mean().item()
+            test_acc_no_noise = accs_no_noise.float().mean().item()
+            self.log("test_acc", test_acc, add_dataloader_idx=False)
+            self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
 
     def analyze_language(self, messages, meanings, is_best_checkpoint=False):
         num_unique_messages = len(messages.unique(dim=0))
@@ -1067,26 +1082,29 @@ class SignalingGameModule(pl.LightningModule):
             if is_best_checkpoint:
                 self.log("message_entropy_at_best_val_acc", entropy)
 
-        if self.params.log_topsim_on_validation or self.force_log:
-            topsim = compute_topsim(meanings, messages)
-            self.log("topsim", topsim, prog_bar=True)
-            print("Topsim: ", topsim)
-            if is_best_checkpoint:
-                self.log("topsim_at_best_val_acc", topsim)
+        if self.guesswhat:
+            print("Skipping compositionality metrics calculation for GuessWhat game.")
+        else:
+            if self.params.log_topsim_on_validation or self.force_log:
+                topsim = compute_topsim(meanings, messages)
+                self.log("topsim", topsim, prog_bar=True)
+                print("Topsim: ", topsim)
+                if is_best_checkpoint:
+                    self.log("topsim_at_best_val_acc", topsim)
 
-        if self.params.log_posdis_on_validation or self.force_log:
-            posdis = compute_posdis(self.num_attributes, self.num_values, meanings, messages)
-            self.log("posdis", posdis, prog_bar=True)
-            print("posdis: ", posdis)
-            if is_best_checkpoint:
-                self.log("posdis_at_best_val_acc", posdis)
+            if self.params.log_posdis_on_validation or self.force_log:
+                posdis = compute_posdis(self.num_attributes, self.num_values, meanings, messages)
+                self.log("posdis", posdis, prog_bar=True)
+                print("posdis: ", posdis)
+                if is_best_checkpoint:
+                    self.log("posdis_at_best_val_acc", posdis)
 
-        if self.params.log_bosdis_on_validation or self.force_log:
-            bosdis = compute_bosdis(self.num_attributes, self.num_values, meanings, messages, self.params["vocab_size"])
-            self.log("bosdis", bosdis, prog_bar=True)
-            print("bodis: ", bosdis)
-            if is_best_checkpoint:
-                self.log("bosdis_at_best_val_acc", bosdis)
+            if self.params.log_bosdis_on_validation or self.force_log:
+                bosdis = compute_bosdis(self.num_attributes, self.num_values, meanings, messages, self.params["vocab_size"])
+                self.log("bosdis", bosdis, prog_bar=True)
+                print("bodis: ", bosdis)
+                if is_best_checkpoint:
+                    self.log("bosdis_at_best_val_acc", bosdis)
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning

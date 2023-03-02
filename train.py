@@ -27,7 +27,8 @@ def run(config):
                                          seed=config.seed,
                                          discrimination_game=config.discrimination_game,
                                          num_objects=config.discrimination_num_objects,
-                                         hard_distractors=config.hard_distractors)
+                                         hard_distractors=config.hard_distractors,
+                                         guesswhat=config.guesswhat)
 
     checkpoint = config.load_checkpoint
 
