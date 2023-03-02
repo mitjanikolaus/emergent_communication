@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from utils import GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS
+from utils import GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
