@@ -9,7 +9,7 @@ import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
-from extract_guesswhat_features import DATA_DIR, H5_IDS_KEY, MAX_NUM_OBJECTS
+from utils import GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
@@ -114,7 +114,7 @@ class SignalingGameGuessWhatDataset(Dataset):
         self.file_name = file_name
 
         self.h5_db = h5py.File(os.path.join(DATA_DIR, self.file_name), 'r')
-        self.h5_ids = self.h5_db[H5_IDS_KEY]
+        self.h5_ids = self.h5_db[GUESSWHAT_H5_IDS_KEY]
 
     def __len__(self):
         return len(self.h5_ids)
@@ -133,7 +133,7 @@ class SignalingGameGuessWhatDataset(Dataset):
         candidate_objects = [torch.tensor(o) for o in candidate_objects]
 
         # Pad with 0 objects
-        candidate_objects += [torch.zeros_like(candidate_objects[0])] * (MAX_NUM_OBJECTS - len(candidate_objects))
+        candidate_objects += [torch.zeros_like(candidate_objects[0])] * (GUESSWHAT_MAX_NUM_OBJECTS - len(candidate_objects))
 
         receiver_input = torch.stack(candidate_objects)
         sender_object = receiver_input[target_position]

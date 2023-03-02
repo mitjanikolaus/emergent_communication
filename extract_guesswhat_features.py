@@ -14,11 +14,7 @@ from torchvision.models import resnet50, ResNet50_Weights
 from torchvision.transforms import transforms
 from tqdm import tqdm
 
-DATA_DIR = os.path.expanduser("~/data/guesswhat/")
-H5_IDS_KEY = "ids"
-
-MAX_NUM_OBJECTS = 10
-IMG_FEATS_DIM = 2048
+from utils import GUESSWHAT_IMG_FEATS_DIM, GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -120,8 +116,8 @@ if __name__ == '__main__':
                     # Do not consider images with only one object
                     continue
 
-                if len(cropped_objects) > MAX_NUM_OBJECTS:
-                    cropped_objects = cropped_objects[:MAX_NUM_OBJECTS]
+                if len(cropped_objects) > GUESSWHAT_MAX_NUM_OBJECTS:
+                    cropped_objects = cropped_objects[:GUESSWHAT_MAX_NUM_OBJECTS]
 
                 # The first image in the tensor is the overview, all following are the cropped objects
                 images = [img] + cropped_objects
@@ -131,11 +127,11 @@ if __name__ == '__main__':
 
                 feats = model(images).squeeze().detach().numpy()
 
-                h5_features = h5_db.create_dataset(sample.id, (len(images), IMG_FEATS_DIM), dtype=np.float32)
+                h5_features = h5_db.create_dataset(sample.id, (len(images), GUESSWHAT_IMG_FEATS_DIM), dtype=np.float32)
 
                 h5_features[:] = feats
 
                 ids.append(sample.id)
 
-            h5_ids = h5_db.create_dataset(H5_IDS_KEY, len(ids), dtype=string_dtype())
+            h5_ids = h5_db.create_dataset(GUESSWHAT_H5_IDS_KEY, len(ids), dtype=string_dtype())
             h5_ids[:] = ids

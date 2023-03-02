@@ -1,4 +1,12 @@
 import torch
+import os
+
+
+DATA_DIR = os.path.expanduser("~/data/guesswhat/")
+GUESSWHAT_H5_IDS_KEY = "ids"
+
+GUESSWHAT_MAX_NUM_OBJECTS = 10
+GUESSWHAT_IMG_FEATS_DIM = 2048
 
 
 class NoBaseline():
