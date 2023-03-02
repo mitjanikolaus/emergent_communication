@@ -125,7 +125,7 @@ if __name__ == '__main__':
 
                 images = torch.stack(images).to(device)
 
-                feats = model(images).squeeze().detach().numpy()
+                feats = model(images).squeeze().cpu().numpy()
 
                 h5_features = h5_db.create_dataset(sample.id, (len(images), GUESSWHAT_IMG_FEATS_DIM), dtype=np.float32)
 
