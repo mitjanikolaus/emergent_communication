@@ -120,25 +120,27 @@ class SignalingGameGuessWhatDataset(Dataset):
         return len(self.h5_ids)
 
     def __getitem__(self, index):
-        candidate_objects = self.h5_db[self.h5_ids[index]]
+        images = self.h5_db[self.h5_ids[index]]
 
-        # Discard first image (scene overview)
-        candidate_objects = candidate_objects[1:]
+        overview_image = images[0]
+        candidate_objects = images[1:]
 
         random.shuffle(candidate_objects)
 
         target_position = random.choice(range(len(candidate_objects)))
         label = target_position
+        target_object = candidate_objects[target_position]
 
         candidate_objects = [torch.tensor(o) for o in candidate_objects]
 
         # Pad with 0 objects
         candidate_objects += [torch.zeros_like(candidate_objects[0])] * (GUESSWHAT_MAX_NUM_OBJECTS - len(candidate_objects))
 
-        receiver_input = torch.stack(candidate_objects)
-        sender_object = receiver_input[target_position]
+        receiver_input = torch.stack([torch.tensor(overview_image)] + candidate_objects)
 
-        return sender_object, receiver_input, label
+        sender_input = torch.stack([torch.tensor(overview_image), torch.tensor(target_object)])
+
+        return sender_input, receiver_input, label
 
 
 class SignalingGameDiscriminationDataset(IterableDataset):
