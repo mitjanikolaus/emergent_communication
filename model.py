@@ -161,7 +161,7 @@ class Receiver(nn.Module):
 class ReceiverDiscrimination(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
-            feedback, vocab_size_feedback, num_objects, stochastic, guesswhat
+            feedback, vocab_size_feedback, num_objects, stochastic
     ):
         super(ReceiverDiscrimination, self).__init__()
 
@@ -172,7 +172,6 @@ class ReceiverDiscrimination(nn.Module):
 
         self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
         self.linear_objects_in = nn.Linear(input_size, embed_dim)
-        self.linear_overview_object = nn.Linear(input_size, embed_dim)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -181,7 +180,6 @@ class ReceiverDiscrimination(nn.Module):
 
         self.feedback = feedback
         self.stochastic = stochastic
-        self.guesswhat = guesswhat
 
         if layer_norm:
             rnn_cell = LayerNormGRUCell
@@ -191,8 +189,6 @@ class ReceiverDiscrimination(nn.Module):
         rnn_input_size = embed_dim
         if self.feedback:
             rnn_input_size = embed_dim*2
-            if self.guesswhat:
-                rnn_input_size += embed_dim
 
         self.cells = nn.ModuleList(
             [
@@ -204,14 +200,9 @@ class ReceiverDiscrimination(nn.Module):
         )
 
         self.linear_objects_2 = nn.Linear(input_size, hidden_size)
-        self.linear_overview_object_2 = nn.Linear(input_size, round(hidden_size/2))
 
-        hidden_to_objects_mul_out_dim = hidden_size
-        if self.guesswhat:
-            hidden_to_objects_mul_out_dim = round(hidden_size/2)
-        self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_to_objects_mul_out_dim)
-
-        self.attn = nn.Linear(hidden_to_objects_mul_out_dim, max_len * hidden_to_objects_mul_out_dim)
+        self.attn = nn.Linear(hidden_size, max_len * hidden_size)
+        self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
 
@@ -223,31 +214,23 @@ class ReceiverDiscrimination(nn.Module):
                 for module in layer:
                     module.reset_parameters()
 
-    def forward_first_turn(self, images, messages):
+    def forward_first_turn(self, candidate_objects, messages):
         batch_size = messages.shape[0]
 
         prev_hidden = [torch.zeros((batch_size, self.hidden_size), dtype=torch.float, device=messages.device) for _ in
                        range(self.num_layers)]
 
-        return self.forward(images, messages, prev_hidden)
+        return self.forward(candidate_objects, messages, prev_hidden)
 
-    def forward(self, images, messages, prev_hidden):
+    def forward(self, candidate_objects, messages, prev_hidden):
         embedded_messages = self.embedding(messages)
         rnn_input = embedded_messages
 
         if self.feedback:
             # TODO: self attention instead of avg?
-            if self.guesswhat:
-                overview_image = images[:, 0]
-                overview_image_embedded = self.linear_overview_object(overview_image)
-                candidate_objects = images[:, 1:]
-                embedded_objects = self.linear_objects_in(candidate_objects)
-                embedded_objects_avg = torch.mean(embedded_objects, dim=1)
-                rnn_input = torch.cat((embedded_messages, overview_image_embedded, embedded_objects_avg), dim=-1)
-            else:
-                embedded_objects = self.linear_objects_in(images)
-                embedded_objects_avg = torch.mean(embedded_objects, dim=1)
-                rnn_input = torch.cat((embedded_messages, embedded_objects_avg), dim=-1)
+            embedded_objects = self.linear_objects_in(candidate_objects)
+            embedded_objects_avg = torch.mean(embedded_objects, dim=1)
+            rnn_input = torch.cat((embedded_messages, embedded_objects_avg), dim=-1)
 
         for i, layer in enumerate(self.cells):
             h_t = layer(rnn_input, prev_hidden[i])
@@ -272,13 +255,8 @@ class ReceiverDiscrimination(nn.Module):
 
         return output_token, entropy, logits, prev_hidden
 
-    def output(self, images, hidden_states, message_lengths):
+    def output(self, candidate_objects, hidden_states, message_lengths):
         batch_size = hidden_states.shape[0]
-
-        if self.guesswhat:
-            candidate_objects = images[:, 1:]
-        else:
-            candidate_objects = images
 
         embedded_objects = self.linear_objects_2(candidate_objects)
 
@@ -290,14 +268,9 @@ class ReceiverDiscrimination(nn.Module):
         hidden_states_summary = torch.mean(hidden_states, dim=1)
         attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
 
-        object_info = torch.sum(hidden_states * attn_weights, dim=1)
+        hidden_states_weighted = torch.sum(hidden_states * attn_weights, dim=1)
 
-        if self.guesswhat:
-            overview_image = images[:, 0]
-            embedded_overview = self.linear_overview_object_2(overview_image)
-            object_info = torch.cat([object_info, embedded_overview], dim=-1)
-
-        output = torch.matmul(embedded_objects, object_info.unsqueeze(2))
+        output = torch.matmul(embedded_objects, hidden_states_weighted.unsqueeze(2))
 
         output = output.squeeze()
 
@@ -329,21 +302,14 @@ class Sender(pl.LightningModule):
         num_layers,
         feedback,
         vocab_size_feedback,
-        guesswhat,
     ):
         super(Sender, self).__init__()
-
-        self.guesswhat = guesswhat
 
         self.max_len = max_len
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
-        linear_in_objects_in_size = input_size
-        if self.guesswhat:
-            linear_in_objects_in_size = input_size * 2
-
-        self.linear_in_objects = nn.Linear(linear_in_objects_in_size, hidden_size)
+        self.linear_in_objects = nn.Linear(input_size, hidden_size)
 
         self.feedback = feedback
         if self.feedback:
@@ -386,9 +352,6 @@ class Sender(pl.LightningModule):
 
     def forward_first_turn(self, input_objects):
         batch_size = input_objects.shape[0]
-
-        if self.guesswhat:
-            input_objects = input_objects.reshape(batch_size, input_objects.shape[-1] * 2)
 
         prev_hidden = [self.linear_in_objects(input_objects)]
         prev_hidden.extend(
@@ -560,8 +523,7 @@ class SignalingGameModule(pl.LightningModule):
                                self.params.vocab_size, self.params.sender_embed_dim,
                                self.params.sender_hidden_dim, self.params.max_len,
                                self.params.sender_layer_norm, self.params.sender_num_layers,
-                               self.params.feedback, self.params.vocab_size_feedback,
-                               self.params.guesswhat)
+                               self.params.feedback, self.params.vocab_size_feedback)
                         for _ in range(self.params.num_senders)
                     ]
                 )
@@ -573,8 +535,7 @@ class SignalingGameModule(pl.LightningModule):
                                  self.input_size,
                                  self.params.receiver_layer_norm, self.params.receiver_num_layers,
                                  self.params.feedback, self.params.vocab_size_feedback,
-                                 self.params.discrimination_num_objects, self.params.stochastic_receiver,
-                                 self.params.guesswhat)
+                                 self.params.discrimination_num_objects, self.params.stochastic_receiver)
                         for _ in range(self.params.num_receivers)
                     ]
                 )
