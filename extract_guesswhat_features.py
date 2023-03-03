@@ -14,7 +14,7 @@ from torchvision.models import resnet50, ResNet50_Weights
 from torchvision.transforms import transforms
 from tqdm import tqdm
 
-from utils import GUESSWHAT_IMG_FEATS_DIM, GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS
+from utils import GUESSWHAT_IMG_FEATS_DIM, GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
