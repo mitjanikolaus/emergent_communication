@@ -856,69 +856,58 @@ class SignalingGameModule(pl.LightningModule):
         effective_entropy_s_1 = sender_entropies.sum(dim=1) / messages_sender_lengths.float()
         effective_log_prob_s = sender_logits.sum(dim=1)
 
-        sender_entropy_loss = effective_entropy_s_1 * self.sender_entropy_coeff
+        sender_entropy_loss = (effective_entropy_s_1 * self.sender_entropy_coeff).mean()
 
-        length_baseline = self.baselines["length_sender"].predict(messages_sender_lengths.device)
-        policy_length_loss = (messages_sender_lengths.float() - length_baseline) * self.length_cost * effective_log_prob_s
+        policy_length_loss = (messages_sender_lengths.float() * self.length_cost * effective_log_prob_s).mean()
 
-        loss_baseline = self.baselines["loss"].predict(sender_input.device)
+        reward_baseline = self.baselines["reward"].predict(sender_input.device)
 
         if self.params.stochastic_receiver:
             receiver_output, receiver_output_entropies, receiver_output_logits = receiver.output(receiver_input, receiver_hidden_states, messages_sender_lengths)
             rewards = (receiver_output == labels).detach().float()
 
-            receiver_policy_loss = (
-                    (- rewards.detach() - loss_baseline) * receiver_output_logits
-            )
+            receiver_policy_loss = (- rewards * receiver_output_logits).mean()
             receiver_entropy_loss = receiver_output_entropies * self.receiver_entropy_coeff
 
             receiver_loss = receiver_policy_loss - receiver_entropy_loss
         else:
             receiver_output = receiver.output(receiver_input, receiver_hidden_states, messages_sender_lengths)
             rewards = (receiver_output.argmax(dim=1) == labels).detach().float()
-            receiver_loss = F.cross_entropy(receiver_output, labels, reduction="none")
+            receiver_loss = F.cross_entropy(receiver_output, labels)
 
-
-        self.log(f"receiver_loss", receiver_loss.mean())
-        assert len(receiver_loss) == batch_size
+        self.log(f"receiver_loss", receiver_loss)
 
         if self.params.feedback:
-            # TODO: does not work with current messages_receiver_lengths (as they ignore eos tokens)
-            # for i in range(messages_receiver.size(1)):
-            #     receiver_entropies[i >= messages_receiver_lengths, i] = 0
-            #     receiver_logits[i >= messages_receiver_lengths, i] = 0
             effective_entropy_r = receiver_entropies.sum(dim=1) / messages_receiver_lengths.float()
-
-            receiver_entropy_loss_2 = effective_entropy_r * self.receiver_entropy_coeff
+            receiver_entropy_loss_2 = (effective_entropy_r * self.receiver_entropy_coeff).mean()
 
             if self.params.stochastic_receiver:
                 receiver_logits = receiver_logits.sum(dim=1)
                 receiver_policy_loss_2 = (
-                        (- rewards.detach() - loss_baseline) * receiver_logits
-                )
+                        - rewards * receiver_logits
+                ).mean()
                 receiver_loss += receiver_policy_loss_2
 
             receiver_loss -= receiver_entropy_loss_2
 
-        self.log(f"entropy_loss", sender_entropy_loss.mean())
+        self.log(f"entropy_loss", sender_entropy_loss)
 
-        sender_policy_loss = (
-            (- rewards.detach() - loss_baseline) * effective_log_prob_s
-        )
+        sender_policy_loss = (- rewards * effective_log_prob_s).mean()
 
-        self.log(f"sender_policy_loss", sender_policy_loss.mean())
-        self.log(f"sender_policy_length_loss", policy_length_loss.mean())
+        if self.params.baseline_type == "none":
+            baseline_loss = 0
+        else:
+            baseline_loss = torch.square(rewards - reward_baseline).mean()
 
-        sender_loss = policy_length_loss + sender_policy_loss - sender_entropy_loss
+        self.log(f"sender_policy_loss", sender_policy_loss)
+        self.log(f"sender_policy_length_loss", policy_length_loss)
 
-        loss = sender_loss.mean() + receiver_loss.mean()
+        sender_loss = sender_policy_loss + baseline_loss + policy_length_loss - sender_entropy_loss
+
+        loss = sender_loss + receiver_loss
 
         if self.training:
-            self.baselines["loss"].update(-rewards)
-            self.baselines["length_sender"].update(messages_sender_lengths.float())
-            # TODO
-            # if self.params.feedback:
-            #     self.baselines["length_receiver"].update(messages_receiver_lengths.float())
+            self.baselines["reward"].update(rewards)
 
         if return_messages:
             return loss, rewards, messages_sender
