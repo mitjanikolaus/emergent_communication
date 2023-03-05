@@ -77,7 +77,7 @@ if __name__ == '__main__':
     for split in ["train", "validation"]:
         ds = load_zoo_dataset("coco-2014", split=split)
 
-        with h5py.File(os.path.join(DATA_DIR, split + "_features.hdf5"), 'w') as h5_db:
+        with h5py.File(os.path.join(DATA_DIR, f"{split}_features_{str(args.min_area_in_pixels)}.hdf5"), 'w') as h5_db:
             resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
             modules = list(resnet.children())[:-1]
             model = nn.Sequential(*modules)
