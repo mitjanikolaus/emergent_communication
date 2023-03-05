@@ -7,9 +7,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
-from tqdm import tqdm
 
-from utils import GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR
+from utils import GUESSWHAT_H5_IDS_KEY, DATA_DIR
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
@@ -38,11 +37,11 @@ class SignalingGameDataModule(pl.LightningDataModule):
         print(f"Num objects in test: ", len(objects_test))
 
         if guesswhat:
-            self.train_dataset = SignalingGameGuessWhatDataset("train_features.hdf5")
+            self.train_dataset = SignalingGameGuessWhatDataset("train_features.hdf5", num_objects)
             val_dataset_file = "validation_features.hdf5"
             if test_set_size <= 0:
                 val_dataset_file = "train_features.hdf5"
-            self.val_dataset = SignalingGameGuessWhatDataset(val_dataset_file)
+            self.val_dataset = SignalingGameGuessWhatDataset(val_dataset_file, num_objects)
             self.test_dataset = None
 
         else:
@@ -110,8 +109,10 @@ class SignalingGameDataset(Dataset):
 
 class SignalingGameGuessWhatDataset(Dataset):
 
-    def __init__(self, file_name):
+    def __init__(self, file_name, num_objects):
         self.file_name = file_name
+
+        self.num_objects = num_objects
 
         self.h5_db = h5py.File(os.path.join(DATA_DIR, self.file_name), 'r')
         self.h5_ids = self.h5_db[GUESSWHAT_H5_IDS_KEY]
@@ -126,6 +127,7 @@ class SignalingGameGuessWhatDataset(Dataset):
         candidate_objects = candidate_objects[1:]
 
         random.shuffle(candidate_objects)
+        candidate_objects = candidate_objects[:self.num_objects]
 
         target_position = random.choice(range(len(candidate_objects)))
         label = target_position
@@ -133,7 +135,7 @@ class SignalingGameGuessWhatDataset(Dataset):
         candidate_objects = [torch.tensor(o) for o in candidate_objects]
 
         # Pad with 0 objects
-        candidate_objects += [torch.zeros_like(candidate_objects[0])] * (GUESSWHAT_MAX_NUM_OBJECTS - len(candidate_objects))
+        candidate_objects += [torch.zeros_like(candidate_objects[0])] * (self.num_objects - len(candidate_objects))
 
         receiver_input = torch.stack(candidate_objects)
         sender_object = receiver_input[target_position]

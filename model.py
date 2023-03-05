@@ -161,7 +161,7 @@ class Receiver(nn.Module):
 class ReceiverDiscrimination(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
-            feedback, vocab_size_feedback, num_objects, stochastic
+            feedback, vocab_size_feedback, stochastic
     ):
         super(ReceiverDiscrimination, self).__init__()
 
@@ -176,7 +176,6 @@ class ReceiverDiscrimination(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.max_len = max_len
-        self.num_objects = num_objects
 
         self.feedback = feedback
         self.stochastic = stochastic
@@ -535,7 +534,7 @@ class SignalingGameModule(pl.LightningModule):
                                  self.input_size,
                                  self.params.receiver_layer_norm, self.params.receiver_num_layers,
                                  self.params.feedback, self.params.vocab_size_feedback,
-                                 self.params.discrimination_num_objects, self.params.stochastic_receiver)
+                                 self.params.stochastic_receiver)
                         for _ in range(self.params.num_receivers)
                     ]
                 )
