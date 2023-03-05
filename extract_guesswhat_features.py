@@ -1,3 +1,5 @@
+import argparse
+
 import h5py
 import numpy as np
 import os
@@ -68,6 +70,10 @@ def get_spatial_feat(bbox, im_width, im_height):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--min-area-in-pixels", type=int, default="500")
+    args = parser.parse_args()
+
     for split in ["train", "validation"]:
         ds = load_zoo_dataset("coco-2014", split=split)
 
@@ -109,7 +115,7 @@ if __name__ == '__main__':
                     )
 
                     area_ppx = (bb[2] * img.width) * (bb[3] * img.height)
-                    if area_ppx > 500:
+                    if area_ppx > args.min_area_in_pixels:
                         cropped_objects.append(cropped)
 
                 if len(cropped_objects) < 2:
