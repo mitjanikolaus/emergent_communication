@@ -171,8 +171,8 @@ class ReceiverDiscrimination(nn.Module):
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
         self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
-        self.linear_objects_in = nn.Linear(input_size, embed_dim)
-        self.attn_obj = nn.Linear(embed_dim, embed_dim * discrimination_num_objects)
+        self.linear_objects_in = nn.Linear(input_size, hidden_size)
+        self.attn_obj = nn.Linear(hidden_size, hidden_size * discrimination_num_objects)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -191,7 +191,7 @@ class ReceiverDiscrimination(nn.Module):
 
         rnn_input_size = embed_dim
         if self.feedback:
-            rnn_input_size = embed_dim*2
+            rnn_input_size = embed_dim + hidden_size
 
         self.cells = nn.ModuleList(
             [
