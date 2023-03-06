@@ -161,7 +161,7 @@ class Receiver(nn.Module):
 class ReceiverDiscrimination(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
-            feedback, vocab_size_feedback, stochastic
+            feedback, vocab_size_feedback, stochastic, output_attention
     ):
         super(ReceiverDiscrimination, self).__init__()
 
@@ -179,6 +179,8 @@ class ReceiverDiscrimination(nn.Module):
 
         self.feedback = feedback
         self.stochastic = stochastic
+
+        self.output_attention = output_attention
 
         if layer_norm:
             rnn_cell = LayerNormGRUCell
@@ -259,17 +261,21 @@ class ReceiverDiscrimination(nn.Module):
 
         embedded_objects = self.linear_objects_2(candidate_objects)
 
-        hidden_states = self.hidden_to_objects_mul(hidden_states)
+        if self.output_attention:
+            hidden_states = self.hidden_to_objects_mul(hidden_states)
 
-        for i in range(self.max_len):
-            hidden_states[i >= message_lengths, i] = 0
+            for i in range(self.max_len):
+                hidden_states[i >= message_lengths, i] = 0
 
-        hidden_states_summary = torch.mean(hidden_states, dim=1)
-        attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
+            hidden_states_summary = torch.mean(hidden_states, dim=1)
+            attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
 
-        hidden_states_weighted = torch.sum(hidden_states * attn_weights, dim=1)
+            hidden_states_transformed = torch.sum(hidden_states * attn_weights, dim=1)
+        else:
+            last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
+            hidden_states_transformed = self.hidden_to_objects_mul(last_hidden_states)
 
-        output = torch.matmul(embedded_objects, hidden_states_weighted.unsqueeze(2))
+        output = torch.matmul(embedded_objects, hidden_states_transformed.unsqueeze(2))
 
         output = output.squeeze()
 
@@ -466,7 +472,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--symmetric", default=False, action="store_true")
         parser.add_argument("--optimal-sender", default=False, action="store_true")
         parser.add_argument("--load-checkpoint", type=str, default=None)
-        parser.add_argument("--baseline-type", type=str, default="none")
+        parser.add_argument("--baseline-type", type=str, default="mean")
 
         parser.add_argument("--num-attributes", type=int, default=4)
         parser.add_argument("--num-values", type=int, default=4)
@@ -486,19 +492,20 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--log-bosdis-on-validation", default=False, action="store_true")
         parser.add_argument("--log-entropy-on-validation", default=False, action="store_true")
 
-        parser.add_argument("--sender_embed_dim", type=int, default=500)
+        parser.add_argument("--sender-embed-dim", type=int, default=500)
         parser.add_argument("--sender-num-layers", type=int, default=1)
         parser.add_argument("--sender-hidden-dim", type=int, default=500)
         parser.add_argument("--sender-learning-speed", type=float, default=1)
         parser.add_argument("--sender-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--sender-layer-norm", default=False, action="store_true")
 
-        parser.add_argument("--receiver_embed_dim", type=int, default=500)
+        parser.add_argument("--receiver-embed-dim", type=int, default=500)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
         parser.add_argument("--receiver-hidden-dim", type=int, default=500)
         parser.add_argument("--receiver-learning-speed", type=float, default=1)
         parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
+        parser.add_argument("--receiver-output-attention", default=False, action="store_true")
 
         parser.add_argument("--reset-parameters", default=False, action="store_true")
         parser.add_argument("--update-masks", default=False, action="store_true")
@@ -534,7 +541,7 @@ class SignalingGameModule(pl.LightningModule):
                                  self.input_size,
                                  self.params.receiver_layer_norm, self.params.receiver_num_layers,
                                  self.params.feedback, self.params.vocab_size_feedback,
-                                 self.params.stochastic_receiver)
+                                 self.params.stochastic_receiver, self.params.receiver_output_attention)
                         for _ in range(self.params.num_receivers)
                     ]
                 )
@@ -867,7 +874,7 @@ class SignalingGameModule(pl.LightningModule):
             rewards = (receiver_output == labels).detach().float()
 
             receiver_policy_loss = (- rewards * receiver_output_logits).mean()
-            receiver_entropy_loss = receiver_output_entropies * self.receiver_entropy_coeff
+            receiver_entropy_loss = (receiver_output_entropies * self.receiver_entropy_coeff).mean()
 
             receiver_loss = receiver_policy_loss - receiver_entropy_loss
         else:
