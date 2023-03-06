@@ -161,7 +161,7 @@ class Receiver(nn.Module):
 class ReceiverDiscrimination(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
-            feedback, vocab_size_feedback, stochastic, output_attention
+            feedback, vocab_size_feedback, stochastic, object_attention, output_attention, discrimination_num_objects
     ):
         super(ReceiverDiscrimination, self).__init__()
 
@@ -172,6 +172,7 @@ class ReceiverDiscrimination(nn.Module):
 
         self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
         self.linear_objects_in = nn.Linear(input_size, embed_dim)
+        self.attn_obj = nn.Linear(embed_dim, embed_dim * discrimination_num_objects)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -180,6 +181,7 @@ class ReceiverDiscrimination(nn.Module):
         self.feedback = feedback
         self.stochastic = stochastic
 
+        self.object_attention = object_attention
         self.output_attention = output_attention
 
         if layer_norm:
@@ -224,14 +226,21 @@ class ReceiverDiscrimination(nn.Module):
         return self.forward(candidate_objects, messages, prev_hidden)
 
     def forward(self, candidate_objects, messages, prev_hidden):
+        batch_size = messages.shape[0]
         embedded_messages = self.embedding(messages)
         rnn_input = embedded_messages
 
         if self.feedback:
-            # TODO: self attention instead of avg?
             embedded_objects = self.linear_objects_in(candidate_objects)
             embedded_objects_avg = torch.mean(embedded_objects, dim=1)
-            rnn_input = torch.cat((embedded_messages, embedded_objects_avg), dim=-1)
+
+            if self.object_attention:
+                attn_weights = F.softmax(self.attn_obj(embedded_objects_avg).reshape(batch_size, -1, embedded_objects.shape[-1]), dim=1)
+                embedded_objects_transformed = torch.sum(attn_weights * embedded_objects, dim=1)
+            else:
+                embedded_objects_transformed = embedded_objects_avg
+
+            rnn_input = torch.cat((embedded_messages, embedded_objects_transformed), dim=-1)
 
         for i, layer in enumerate(self.cells):
             h_t = layer(rnn_input, prev_hidden[i])
@@ -507,6 +516,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
         parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
         parser.add_argument("--receiver-output-attention", default=False, action="store_true")
+        parser.add_argument("--receiver-object-attention", default=False, action="store_true")
 
         parser.add_argument("--reset-parameters", default=False, action="store_true")
         parser.add_argument("--update-masks", default=False, action="store_true")
@@ -542,7 +552,8 @@ class SignalingGameModule(pl.LightningModule):
                                  self.input_size,
                                  self.params.receiver_layer_norm, self.params.receiver_num_layers,
                                  self.params.feedback, self.params.vocab_size_feedback,
-                                 self.params.stochastic_receiver, self.params.receiver_output_attention)
+                                 self.params.stochastic_receiver, self.params.receiver_object_attention,
+                                 self.params.receiver_output_attention, self.params.discrimination_num_objects)
                         for _ in range(self.params.num_receivers)
                     ]
                 )
