@@ -466,6 +466,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--hard-distractors", default=False, action="store_true")
 
         parser.add_argument("--stochastic-receiver", default=False, action="store_true")
+        parser.add_argument("--initial-lr", type=float, default=1e-3)
 
         parser.add_argument("--guesswhat", default=False, action="store_true")
 
@@ -566,8 +567,8 @@ class SignalingGameModule(pl.LightningModule):
         if self.params.optimal_sender:
             optimizers_sender = []
         else:
-            optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=1e-3) for sender in self.senders]
-        optimizers_receiver = [torch.optim.Adam(receiver.parameters(), lr=1e-3) for receiver in self.receivers]
+            optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=self.params.initial_lr) for sender in self.senders]
+        optimizers_receiver = [torch.optim.Adam(receiver.parameters(), lr=self.params.initial_lr) for receiver in self.receivers]
 
         return tuple(itertools.chain(optimizers_sender, optimizers_receiver))
 
