@@ -168,9 +168,9 @@ class ReceiverDiscrimination(nn.Module):
         # Add one symbol for noise treatment
         vocab_size_perception = vocab_size + 1
 
-        self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
+        self.embedding_sender = nn.Embedding(vocab_size_perception, embed_dim)
+        self.embedding_receiver = nn.Embedding(vocab_size_perception, embed_dim)
 
-        self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
         self.linear_objects_in = nn.Linear(input_size, hidden_size)
         self.attn_obj = nn.Linear(hidden_size, hidden_size * discrimination_num_objects)
 
@@ -191,7 +191,9 @@ class ReceiverDiscrimination(nn.Module):
 
         rnn_input_size = embed_dim
         if self.feedback:
-            rnn_input_size = embed_dim + hidden_size
+            rnn_input_size += embed_dim + hidden_size
+
+        self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
         self.cells = nn.ModuleList(
             [
@@ -223,11 +225,23 @@ class ReceiverDiscrimination(nn.Module):
         prev_hidden = [torch.zeros((batch_size, self.hidden_size), dtype=torch.float, device=messages.device) for _ in
                        range(self.num_layers)]
 
-        return self.forward(candidate_objects, messages, prev_hidden)
+        if self.feedback:
+            prev_receiver_messages = torch.stack([self.sos_embedding] * batch_size)
 
-    def forward(self, candidate_objects, messages, prev_hidden):
+            return self.forward(candidate_objects, messages, prev_hidden, prev_receiver_messages)
+        else:
+            return self.forward(candidate_objects, messages, prev_hidden)
+
+    def forward_subsequent_turn(self, candidate_objects, messages, prev_hidden, prev_receiver_messages=None):
+        if self.feedback:
+            prev_msg_embedding = self.embedding_receiver(prev_receiver_messages)
+            return self.forward(candidate_objects, messages, prev_hidden, prev_msg_embedding)
+        else:
+            return self.forward(candidate_objects, messages, prev_hidden)
+
+    def forward(self, candidate_objects, messages, prev_hidden, prev_msg_embedding=None):
         batch_size = messages.shape[0]
-        embedded_messages = self.embedding(messages)
+        embedded_messages = self.embedding_sender(messages)
         rnn_input = embedded_messages
 
         if self.feedback:
@@ -240,7 +254,7 @@ class ReceiverDiscrimination(nn.Module):
             else:
                 embedded_objects_transformed = embedded_objects_avg
 
-            rnn_input = torch.cat((embedded_messages, embedded_objects_transformed), dim=-1)
+            rnn_input = torch.cat((embedded_messages, prev_msg_embedding, embedded_objects_transformed), dim=-1)
 
         for i, layer in enumerate(self.cells):
             h_t = layer(rnn_input, prev_hidden[i])
@@ -322,14 +336,11 @@ class Sender(pl.LightningModule):
         self.max_len = max_len
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
+        self.sos_embedding_perc = nn.Parameter(torch.zeros(embed_dim))
 
         self.linear_in_objects = nn.Linear(input_size, hidden_size)
 
         self.feedback = feedback
-        if self.feedback:
-            self.linear_in_response = nn.Linear(embed_dim * 2, embed_dim)
-        else:
-            self.linear_in_response = nn.Linear(embed_dim, embed_dim)
 
         self.hidden_to_output = nn.Linear(hidden_size, vocab_size)
 
@@ -347,9 +358,13 @@ class Sender(pl.LightningModule):
         else:
             rnn_cell = GRUCell
 
+        rnn_input_size = embed_dim
+        if self.feedback:
+            rnn_input_size += embed_dim
+
         self.cells = nn.ModuleList(
             [
-                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
+                rnn_cell(input_size=rnn_input_size, hidden_size=hidden_size)
                 if i == 0
                 else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
                 for i in range(self.num_layers)
@@ -374,6 +389,10 @@ class Sender(pl.LightningModule):
 
         input = torch.stack([self.sos_embedding] * batch_size)
 
+        if self.feedback:
+            input_perc = torch.stack([self.sos_embedding_perc] * batch_size)
+            input = torch.cat((input, input_perc), dim=1)
+
         return self.forward(input, prev_hidden)
 
     def forward_subsequent_turn(self, output_last_turn, prev_hidden, input_response):
@@ -381,11 +400,9 @@ class Sender(pl.LightningModule):
 
         if self.feedback:
             embedded_input = self.embedding_response(input_response)
-            inputs = torch.cat((embedded_input, embedded_output_last_turn), dim=1)
+            input = torch.cat((embedded_output_last_turn, embedded_input), dim=1)
         else:
-            inputs = embedded_output_last_turn
-
-        input = self.linear_in_response(inputs)
+            input = embedded_output_last_turn
 
         return self.forward(input, prev_hidden)
 
@@ -690,8 +707,8 @@ class SignalingGameModule(pl.LightningModule):
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
             messages_sender.append(sender_output_tokens_detached)
 
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward(
-                sender_output_tokens_detached, receiver_prev_hidden)
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_subsequent_turn(
+                sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
             receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
             if self.params.feedback:
                 receiver_entropies.append(receiver_step_entropy)
@@ -840,8 +857,8 @@ class SignalingGameModule(pl.LightningModule):
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
             messages_sender.append(sender_output_tokens_detached)
 
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward(
-                receiver_input, sender_output_tokens_detached, receiver_prev_hidden)
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_subsequent_turn(
+                receiver_input, sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
             receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
             if self.params.feedback:
                 receiver_entropies.append(receiver_step_entropy)
