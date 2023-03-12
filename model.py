@@ -12,7 +12,7 @@ import pytorch_lightning as pl
 from torch.nn import ModuleList, GRUCell
 
 from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
-from utils import GUESSWHAT_IMG_FEATS_DIM
+from utils import RESNET_IMG_FEATS_DIM
 from utils import MeanBaseline, find_lengths, NoBaseline
 
 
@@ -447,7 +447,7 @@ class SignalingGameModule(pl.LightningModule):
 
         self.input_size = num_attributes * num_values
         if guesswhat:
-            self.input_size = GUESSWHAT_IMG_FEATS_DIM
+            self.input_size = RESNET_IMG_FEATS_DIM
 
         self.save_hyperparameters()
         self.params = AttributeDict(self.hparams)

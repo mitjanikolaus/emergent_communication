@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader, IterableDataset
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
 
-from utils import GUESSWHAT_H5_IDS_KEY, DATA_DIR
+from utils import H5_IDS_KEY, DATA_DIR_GUESSWHAT
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
@@ -114,8 +114,8 @@ class SignalingGameGuessWhatDataset(Dataset):
 
         self.num_objects = num_objects
 
-        self.h5_db = h5py.File(os.path.join(DATA_DIR, self.file_name), 'r')
-        self.h5_ids = self.h5_db[GUESSWHAT_H5_IDS_KEY]
+        self.h5_db = h5py.File(os.path.join(DATA_DIR_GUESSWHAT, self.file_name), 'r')
+        self.h5_ids = self.h5_db[H5_IDS_KEY]
 
     def __len__(self):
         return len(self.h5_ids)

@@ -16,7 +16,7 @@ from torchvision.models import resnet50, ResNet50_Weights
 from torchvision.transforms import transforms
 from tqdm import tqdm
 
-from utils import GUESSWHAT_IMG_FEATS_DIM, GUESSWHAT_H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR
+from utils import RESNET_IMG_FEATS_DIM, H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR_GUESSWHAT
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -77,7 +77,7 @@ if __name__ == '__main__':
     for split in ["train", "validation"]:
         ds = load_zoo_dataset("coco-2014", split=split)
 
-        with h5py.File(os.path.join(DATA_DIR, f"{split}_features_{str(args.min_area_in_pixels)}.hdf5"), 'w') as h5_db:
+        with h5py.File(os.path.join(DATA_DIR_GUESSWHAT, f"{split}_features_{str(args.min_area_in_pixels)}.hdf5"), 'w') as h5_db:
             resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
             modules = list(resnet.children())[:-1]
             model = nn.Sequential(*modules)
@@ -133,11 +133,11 @@ if __name__ == '__main__':
 
                 feats = model(images).squeeze().cpu().numpy()
 
-                h5_features = h5_db.create_dataset(sample.id, (len(images), GUESSWHAT_IMG_FEATS_DIM), dtype=np.float32)
+                h5_features = h5_db.create_dataset(sample.id, (len(images), RESNET_IMG_FEATS_DIM), dtype=np.float32)
 
                 h5_features[:] = feats
 
                 ids.append(sample.id)
 
-            h5_ids = h5_db.create_dataset(GUESSWHAT_H5_IDS_KEY, len(ids), dtype=string_dtype())
+            h5_ids = h5_db.create_dataset(H5_IDS_KEY, len(ids), dtype=string_dtype())
             h5_ids[:] = ids

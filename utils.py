@@ -2,11 +2,13 @@ import torch
 import os
 
 
-DATA_DIR = os.path.expanduser("~/data/guesswhat/")
-GUESSWHAT_H5_IDS_KEY = "ids"
+DATA_DIR_GUESSWHAT = os.path.expanduser("~/data/guesswhat/")
+DATA_DIR_IMAGENET = os.path.expanduser("~/data/imagenet/")
+
+H5_IDS_KEY = "ids"
 
 GUESSWHAT_MAX_NUM_OBJECTS = 10
-GUESSWHAT_IMG_FEATS_DIM = 2048
+RESNET_IMG_FEATS_DIM = 2048
 
 
 class NoBaseline():
