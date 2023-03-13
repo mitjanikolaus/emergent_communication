@@ -169,7 +169,7 @@ class ReceiverDiscrimination(nn.Module):
         vocab_size_perception = vocab_size + 1
 
         self.embedding_sender = nn.Embedding(vocab_size_perception, embed_dim)
-        self.embedding_receiver = nn.Embedding(vocab_size_perception, embed_dim)
+        self.embedding_receiver = nn.Embedding(vocab_size_feedback, embed_dim)
 
         self.linear_objects_in = nn.Linear(input_size, hidden_size)
         self.attn_obj = nn.Linear(hidden_size, hidden_size * discrimination_num_objects)

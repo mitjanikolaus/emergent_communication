@@ -32,9 +32,6 @@ class SignalingGameDataModule(pl.LightningDataModule):
             objects_train = objects
             objects_val = objects
             objects_test = objects
-        print(f"Num objects in train: ", len(objects_train))
-        print(f"Num objects in val: ", len(objects_val))
-        print(f"Num objects in test: ", len(objects_test))
 
         if guesswhat:
             self.train_dataset = SignalingGameGuessWhatDataset("train_features.hdf5", num_objects)
@@ -45,6 +42,10 @@ class SignalingGameDataModule(pl.LightningDataModule):
             self.test_dataset = None
 
         else:
+            print(f"Num objects in train: ", len(objects_train))
+            print(f"Num objects in val: ", len(objects_val))
+            print(f"Num objects in test: ", len(objects_test))
+
             if self.discrimination_game:
                 self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
                 self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
