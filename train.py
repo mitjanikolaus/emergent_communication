@@ -28,7 +28,8 @@ def run(config):
                                          discrimination_game=config.discrimination_game,
                                          num_objects=config.discrimination_num_objects,
                                          hard_distractors=config.hard_distractors,
-                                         guesswhat=config.guesswhat)
+                                         guesswhat=config.guesswhat,
+                                         imagenet=config.imagenet,)
 
     checkpoint = config.load_checkpoint
 

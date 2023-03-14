@@ -8,12 +8,12 @@ from torch.utils.data import Dataset, DataLoader, IterableDataset
 import pytorch_lightning as pl
 from sklearn.model_selection import train_test_split
 
-from utils import H5_IDS_KEY, DATA_DIR_GUESSWHAT
+from utils import H5_IDS_KEY, DATA_DIR_GUESSWHAT, DATA_DIR_IMAGENET
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
     def __init__(self, num_attributes, num_values, max_num_objects, test_set_size, batch_size, num_workers, seed,
-                 discrimination_game=False, num_objects=10, hard_distractors=False, guesswhat=False):
+                 discrimination_game=False, num_objects=10, hard_distractors=False, guesswhat=False, imagenet=False):
         super().__init__()
         self.num_attributes = num_attributes
         self.num_values = num_values
@@ -34,11 +34,21 @@ class SignalingGameDataModule(pl.LightningDataModule):
             objects_test = objects
 
         if guesswhat:
+            print("GuessWhat Game")
             self.train_dataset = SignalingGameGuessWhatDataset("train_features.hdf5", num_objects)
             val_dataset_file = "validation_features.hdf5"
             if test_set_size <= 0:
                 val_dataset_file = "train_features.hdf5"
             self.val_dataset = SignalingGameGuessWhatDataset(val_dataset_file, num_objects)
+            self.test_dataset = None
+
+        elif imagenet:
+            print("ImageNet Game")
+            self.train_dataset = SignalingGameImagenetDataset("train_features.hdf5", num_objects)
+            val_dataset_file = "val_features.hdf5"
+            if test_set_size <= 0:
+                val_dataset_file = "train_features.hdf5"
+            self.val_dataset = SignalingGameImagenetDataset(val_dataset_file, num_objects)
             self.test_dataset = None
 
         else:
@@ -137,6 +147,40 @@ class SignalingGameGuessWhatDataset(Dataset):
 
         # Pad with 0 objects
         candidate_objects += [torch.zeros_like(candidate_objects[0])] * (self.num_objects - len(candidate_objects))
+
+        receiver_input = torch.stack(candidate_objects)
+        sender_object = receiver_input[target_position]
+
+        return sender_object, receiver_input, label
+
+
+class SignalingGameImagenetDataset(Dataset):
+
+    def __init__(self, file_name, num_objects):
+        self.file_name = file_name
+
+        self.num_objects = num_objects
+
+        self.h5_db = h5py.File(os.path.join(DATA_DIR_IMAGENET, self.file_name), 'r')
+        self.h5_ids = self.h5_db[H5_IDS_KEY]
+
+    def __len__(self):
+        return len(self.h5_ids)
+
+    def __getitem__(self, index):
+        target_id = self.h5_ids[index]
+
+        candidate_object_ids = random.sample(self.h5_ids, k=self.num_objects)
+        while target_id in candidate_object_ids:
+            # Ensure that target is not among candidates
+            candidate_object_ids = random.sample(self.h5_ids, k=self.num_objects)
+
+        target_position = random.choice(range(len(candidate_object_ids)))
+        label = target_position
+
+        candidate_object_ids[target_position] = target_id
+
+        candidate_objects = [torch.tensor(self.h5_db[o]) for o in candidate_object_ids]
 
         receiver_input = torch.stack(candidate_objects)
         sender_object = receiver_input[target_position]

@@ -436,7 +436,7 @@ class SignalingGameModule(pl.LightningModule):
                  vocab_size=5, noise=0, feedback=False, self_repair=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False,
-                 discrimination_game=False, guesswhat=False, **kwargs):
+                 discrimination_game=False, guesswhat=False, imagenet=False, **kwargs):
         super().__init__()
         if self_repair and feedback:
             raise ValueError("Can't set both self_repair and feedback at the same time!")
@@ -446,14 +446,16 @@ class SignalingGameModule(pl.LightningModule):
             vocab_size_feedback = 2
 
         self.input_size = num_attributes * num_values
-        if guesswhat:
+        if guesswhat or imagenet:
             self.input_size = RESNET_IMG_FEATS_DIM
+            discrimination_game = True
 
         self.save_hyperparameters()
         self.params = AttributeDict(self.hparams)
 
         self.discrimination_game = discrimination_game
         self.guesswhat = guesswhat
+        self.imagenet = imagenet
 
         self.init_agents()
 
@@ -495,6 +497,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--initial-lr", type=float, default=1e-3)
 
         parser.add_argument("--guesswhat", default=False, action="store_true")
+        parser.add_argument("--imagenet", default=False, action="store_true")
 
         parser.add_argument("--symmetric", default=False, action="store_true")
         parser.add_argument("--optimal-sender", default=False, action="store_true")
@@ -561,7 +564,7 @@ class SignalingGameModule(pl.LightningModule):
                         for _ in range(self.params.num_senders)
                     ]
                 )
-            if self.params.discrimination_game or self.params.guesswhat:
+            if self.params.discrimination_game:
                 self.receivers = ModuleList(
                     [
                         ReceiverDiscrimination(self.params.vocab_size, self.params.receiver_embed_dim,
@@ -652,7 +655,7 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, add_dataloader_idx=False)
 
     def forward(self, batch, sender_idx, receiver_idx, return_messages=False, disable_noise=False):
-        if self.discrimination_game or self.guesswhat:
+        if self.discrimination_game:
             return self.forward_discrimination(batch, sender_idx, receiver_idx, return_messages, disable_noise)
         else:
             return self.forward_reconstruction(batch, sender_idx, receiver_idx, return_messages, disable_noise)
@@ -1058,7 +1061,7 @@ class SignalingGameModule(pl.LightningModule):
         if is_best_checkpoint:
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
 
-        if self.discrimination_game or self.guesswhat:
+        if self.discrimination_game:
             meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
         else:
             meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
@@ -1106,8 +1109,8 @@ class SignalingGameModule(pl.LightningModule):
             if is_best_checkpoint:
                 self.log("message_entropy_at_best_val_acc", entropy)
 
-        if self.guesswhat:
-            print("Skipping compositionality metrics calculation for GuessWhat game.")
+        if self.guesswhat or self.imagenet:
+            print("Skipping compositionality metrics calculation.")
         else:
             if self.params.log_topsim_on_validation or self.force_log:
                 topsim = compute_topsim(meanings, messages)
