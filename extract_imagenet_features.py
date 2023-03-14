@@ -1,11 +1,11 @@
 import argparse
+import glob
 
 import h5py
 import numpy as np
 import os
 
 import torch
-from fiftyone.zoo import load_zoo_dataset
 from PIL import Image as PIL_Image
 from h5py import string_dtype
 from torch import nn
@@ -27,8 +27,8 @@ if __name__ == '__main__':
     parser.add_argument("--source-dir", type=str)
     args = parser.parse_args()
 
-    for split in ["train", "validation"]:
-        ds = load_zoo_dataset("imagenet-2012", split=split, max_samples=1000, source_dir=args.source_dir)
+    for split in ["train", "val"]:
+        base_path = os.path.join(args.source_dir, split)
 
         with h5py.File(os.path.join(DATA_DIR_IMAGENET, f"{split}_features.hdf5"), 'w') as h5_db:
             resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
@@ -51,11 +51,14 @@ if __name__ == '__main__':
             all_ids = []
             ids_batch = []
             images_batch = []
-            for sample in tqdm(ds):
-                img = PIL_Image.open(sample.filepath)
+
+            for filepath in tqdm(glob.iglob(f'{base_path}/**/*.JPEG')):
+                img_id = os.path.basename(filepath).replace(".JPEG", "")
+
+                img = PIL_Image.open(filepath)
                 images_batch.append(img)
-                ids_batch.append(sample.id)
-                all_ids.append(sample.id)
+                ids_batch.append(img_id)
+                all_ids.append(img_id)
 
                 if len(images_batch) == BATCH_SIZE:
                     images = [preprocessing(img) for img in images_batch]
