@@ -61,7 +61,6 @@ if __name__ == '__main__':
 
                 images_batch.append(img)
                 ids_batch.append(img_id)
-                all_ids.append(img_id)
 
                 if len(images_batch) == BATCH_SIZE:
                     images = [preprocessing(img) for img in images_batch]
@@ -72,8 +71,8 @@ if __name__ == '__main__':
 
                     for id, feat in zip(ids_batch, feats):
                         h5_features = h5_db.create_dataset(id, RESNET_IMG_FEATS_DIM, dtype=np.float32)
-
                         h5_features[:] = feat
+                        all_ids.append(img_id)
 
                     images_batch = []
                     ids_batch = []
