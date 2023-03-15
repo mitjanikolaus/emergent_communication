@@ -22,6 +22,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.max_num_objects = max_num_objects
         self.num_objects = num_objects
         self.discrimination_game = discrimination_game
+        self.imagenet = imagenet
 
         objects = generate_objects(num_attributes, num_values, max_num_objects)
         if test_set_size > 0:
@@ -72,16 +73,50 @@ class SignalingGameDataModule(pl.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=shuffle)
 
     def val_dataloader(self):
+        collate_fn = None
+        if self.imagenet:
+            collate_fn = self.collate_add_batch_distractors
+
         validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
-                                               num_workers=self.num_workers)
+                                               num_workers=self.num_workers, collate_fn=collate_fn)
         language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
-                                                  num_workers=self.num_workers)
+                                                  num_workers=self.num_workers, collate_fn=collate_fn)
         if self.test_dataset:
-            test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers)
+            test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                                         collate_fn=collate_fn)
 
             return validation_dataloader, language_analysis_dataloader, test_dataloader
         else:
             return validation_dataloader, language_analysis_dataloader
+
+    def collate_add_batch_distractors(self, batch):
+        sender_objects = []
+        receiver_inputs = []
+        labels = []
+        for i, target_object in enumerate(batch):
+            candidate_object_ids = random.sample(range(len(batch)), k=self.num_objects)
+            while i in candidate_object_ids:
+                # Ensure that target is not among candidates
+                candidate_object_ids = random.sample(range(len(batch)), k=self.num_objects)
+
+            target_position = random.choice(range(len(candidate_object_ids)))
+
+            candidate_objects = [batch[idx] for idx in candidate_object_ids]
+            candidate_object_ids[target_position] = target_object
+
+            receiver_input = torch.stack(candidate_objects)
+            sender_object = receiver_input[target_position]
+
+            sender_objects.append(sender_object)
+            receiver_inputs.append(receiver_inputs)
+            labels.append(target_position)
+
+        receiver_inputs = torch.stack(receiver_inputs)
+        sender_objects = torch.stack(sender_objects)
+        labels = torch.stack(labels)
+
+        return sender_objects, receiver_inputs, labels
+
 
 
 def generate_objects(num_attributes, num_values, max_num_objects):
@@ -169,22 +204,7 @@ class SignalingGameImagenetDataset(Dataset):
     def __getitem__(self, index):
         target_id = self.h5_ids[index]
 
-        candidate_object_ids = random.sample(self.h5_ids, k=self.num_objects)
-        while target_id in candidate_object_ids:
-            # Ensure that target is not among candidates
-            candidate_object_ids = random.sample(self.h5_ids, k=self.num_objects)
-
-        target_position = random.choice(range(len(candidate_object_ids)))
-        label = target_position
-
-        candidate_object_ids[target_position] = target_id
-
-        candidate_objects = [torch.tensor(self.h5_db[o]) for o in candidate_object_ids]
-
-        receiver_input = torch.stack(candidate_objects)
-        sender_object = receiver_input[target_position]
-
-        return sender_object, receiver_input, label
+        return torch.tensor(self.h5_db[target_id])
 
 
 class SignalingGameDiscriminationDataset(IterableDataset):
