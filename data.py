@@ -84,7 +84,6 @@ class SignalingGameDataModule(pl.LightningDataModule):
             return validation_dataloader, language_analysis_dataloader
 
 
-
 def generate_objects(num_attributes, num_values, max_num_objects):
     samples = set()
     if num_values**num_attributes <= max_num_objects:
@@ -162,7 +161,7 @@ class SignalingGameImagenetDataset(Dataset):
         self.num_objects = num_objects
 
         self.h5_db = h5py.File(os.path.join(DATA_DIR_IMAGENET, self.file_name), 'r')
-        self.h5_ids = self.h5_db[H5_IDS_KEY]
+        self.h5_ids = list(self.h5_db[H5_IDS_KEY])
 
     def __len__(self):
         return len(self.h5_ids)
