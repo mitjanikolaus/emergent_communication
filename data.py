@@ -109,7 +109,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
 
             sender_objects.append(sender_object)
             receiver_inputs.append(receiver_input)
-            labels.append(target_position)
+            labels.append(torch.tensor(target_position))
 
         receiver_inputs = torch.stack(receiver_inputs)
         sender_objects = torch.stack(sender_objects)
