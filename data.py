@@ -24,6 +24,10 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.discrimination_game = discrimination_game
         self.imagenet = imagenet
 
+        self.collate_fn = None
+        if self.imagenet:
+            self.collate_fn = self.collate_add_batch_distractors
+
         objects = generate_objects(num_attributes, num_values, max_num_objects)
         if test_set_size > 0:
             objects_train, objects_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=seed)
@@ -70,20 +74,17 @@ class SignalingGameDataModule(pl.LightningDataModule):
         shuffle = True
         if self.discrimination_game:
             shuffle = False
-        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=shuffle)
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
+                          shuffle=shuffle, collate_fn=self.collate_fn )
 
     def val_dataloader(self):
-        collate_fn = None
-        if self.imagenet:
-            collate_fn = self.collate_add_batch_distractors
-
         validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
-                                               num_workers=self.num_workers, collate_fn=collate_fn)
+                                               num_workers=self.num_workers, collate_fn=self.collate_fn)
         language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
-                                                  num_workers=self.num_workers, collate_fn=collate_fn)
+                                                  num_workers=self.num_workers, collate_fn=self.collate_fn)
         if self.test_dataset:
             test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
-                                         collate_fn=collate_fn)
+                                         collate_fn=self.collate_fn)
 
             return validation_dataloader, language_analysis_dataloader, test_dataloader
         else:
