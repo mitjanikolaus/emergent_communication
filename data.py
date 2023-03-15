@@ -200,7 +200,8 @@ class SignalingGameImagenetDataset(Dataset):
         self.h5_ids = self.h5_db[H5_IDS_KEY]
 
     def __len__(self):
-        return len(self.h5_ids)
+        # TODO: fix for bug in extract feats:
+        return len(self.h5_ids) - len(self.h5_ids) % 100
 
     def __getitem__(self, index):
         target_id = self.h5_ids[index]
