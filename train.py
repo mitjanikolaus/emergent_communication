@@ -21,6 +21,7 @@ def run(config):
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
                                          num_values=config.num_values,
                                          max_num_objects=config.max_num_objects,
+                                         val_set_size=config.val_set_size,
                                          test_set_size=config.test_set_size,
                                          batch_size=config.batch_size,
                                          num_workers=config.num_workers,
@@ -86,7 +87,8 @@ def get_args():
     parser.add_argument("--seed", type=int, default="1")
     parser.add_argument("--max-num-objects", type=int, default="100000")
     parser.add_argument("--batch-size", type=int, default="1000")
-    parser.add_argument("--test-set-size", type=float, default=0.1)
+    parser.add_argument("--val-set-size", type=float, default=0.1)
+    parser.add_argument("--test-set-size", type=float, default=0.0)
     parser.add_argument("--num-workers", type=int, default="0")
     parser.add_argument("--patience", type=int, default=50)
     parser.add_argument("--stopping-threshold", type=float, default=0.99)

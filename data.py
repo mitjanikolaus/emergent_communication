@@ -12,8 +12,9 @@ from utils import H5_IDS_KEY, DATA_DIR_GUESSWHAT, DATA_DIR_IMAGENET
 
 
 class SignalingGameDataModule(pl.LightningDataModule):
-    def __init__(self, num_attributes, num_values, max_num_objects, test_set_size, batch_size, num_workers, seed,
-                 discrimination_game=False, num_objects=10, hard_distractors=False, guesswhat=False, imagenet=False):
+    def __init__(self, num_attributes, num_values, max_num_objects, val_set_size, test_set_size, batch_size,
+                 num_workers, seed, discrimination_game=False, num_objects=10, hard_distractors=False, guesswhat=False,
+                 imagenet=False):
         super().__init__()
         self.num_attributes = num_attributes
         self.num_values = num_values
@@ -23,26 +24,30 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.num_objects = num_objects
         self.discrimination_game = discrimination_game
         self.imagenet = imagenet
+        self.use_test_set = test_set_size > 0
 
         self.collate_fn = None
         if self.imagenet:
             self.collate_fn = self.collate_add_batch_distractors
 
         objects = generate_objects(num_attributes, num_values, max_num_objects)
-        if test_set_size > 0:
+        if self.use_test_set:
             objects_train, objects_test = train_test_split(objects, test_size=test_set_size, shuffle=True, random_state=seed)
-            objects_train, objects_val = train_test_split(objects_train, test_size=test_set_size, shuffle=True, random_state=seed)
+            objects_train, objects_val = train_test_split(objects_train, test_size=val_set_size, shuffle=True, random_state=seed)
+        elif val_set_size > 0:
+            objects_train, objects_val = train_test_split(objects, test_size=val_set_size, shuffle=True, random_state=seed)
+            objects_test = None
         else:
-            print("Test set size <= 0: Setting train_set = test_set = val_set!")
+            print("Val set size <= 0: Setting train_set = val_set!")
             objects_train = objects
             objects_val = objects
-            objects_test = objects
+            objects_test = None
 
         if guesswhat:
             print("GuessWhat Game")
             self.train_dataset = SignalingGameGuessWhatDataset("train_features.hdf5", num_objects)
             val_dataset_file = "validation_features.hdf5"
-            if test_set_size <= 0:
+            if val_set_size <= 0:
                 val_dataset_file = "train_features.hdf5"
             self.val_dataset = SignalingGameGuessWhatDataset(val_dataset_file, num_objects)
             self.test_dataset = None
@@ -51,7 +56,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
             print("ImageNet Game")
             self.train_dataset = SignalingGameImagenetDataset("train_features.hdf5", num_objects)
             val_dataset_file = "val_features.hdf5"
-            if test_set_size <= 0:
+            if val_set_size <= 0:
                 val_dataset_file = "train_features.hdf5"
             self.val_dataset = SignalingGameImagenetDataset(val_dataset_file, num_objects)
             self.test_dataset = None
@@ -59,16 +64,19 @@ class SignalingGameDataModule(pl.LightningDataModule):
         else:
             print(f"Num objects in train: ", len(objects_train))
             print(f"Num objects in val: ", len(objects_val))
-            print(f"Num objects in test: ", len(objects_test))
+            if self.use_test_set:
+                print(f"Num objects in test: ", len(objects_test))
 
             if self.discrimination_game:
                 self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
                 self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
-                self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
+                if self.use_test_set:
+                    self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
             else:
                 self.train_dataset = SignalingGameDataset(objects_train)
                 self.val_dataset = SignalingGameDataset(objects_val)
-                self.test_dataset = SignalingGameDataset(objects_test)
+                if self.use_test_set:
+                    self.test_dataset = SignalingGameDataset(objects_test)
 
     def train_dataloader(self):
         shuffle = True
@@ -82,7 +90,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
                                                num_workers=self.num_workers, collate_fn=self.collate_fn)
         language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
                                                   num_workers=self.num_workers, collate_fn=self.collate_fn)
-        if self.test_dataset:
+        if self.use_test_set:
             test_dataloader = DataLoader(self.test_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
                                          collate_fn=self.collate_fn)
 
