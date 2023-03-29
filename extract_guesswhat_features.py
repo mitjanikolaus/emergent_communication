@@ -89,8 +89,7 @@ if __name__ == '__main__':
                 preprocessing = ResNet50_Weights.DEFAULT.transforms()
                 feat_size = RESNET_IMG_FEATS_DIM
             elif args.model == "vit":
-                vit = vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
-                model = create_feature_extractor(vit, return_nodes=["encoder"])
+                model = vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
 
                 preprocessing = ViT_B_16_Weights.DEFAULT.transforms()
                 feat_size = ViT_IMG_FEATS_DIM
@@ -141,8 +140,16 @@ if __name__ == '__main__':
                 if args.model == "resnet":
                     feats = model(images).squeeze().cpu().numpy()
                 else:
-                    feats = model(images)["encoder"]
-                    feats = torch.mean(feats, dim=1).squeeze().cpu().numpy()
+                    feats = model._process_input(images)
+
+                    # Expand the class token to the full batch
+                    batch_class_token = model.class_token.expand(images.shape[0], -1, -1)
+                    feats = torch.cat([batch_class_token, feats], dim=1)
+
+                    feats = model.encoder(feats)
+
+                    # We're only interested in the representation of the classifier token that we appended at pos 0
+                    feats = feats[:, 0].squeeze().cpu().numpy()
 
                 h5_features = h5_db.create_dataset(sample.id, (len(images), feat_size), dtype=np.float32)
 
