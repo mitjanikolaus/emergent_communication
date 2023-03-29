@@ -13,7 +13,6 @@ from matplotlib.patches import Rectangle
 from torch import nn
 
 from torchvision.models import resnet50, ResNet50_Weights, ViT_B_16_Weights
-from torchvision.models.feature_extraction import create_feature_extractor
 from torchvision.models.vision_transformer import vit_b_16
 from tqdm import tqdm
 
