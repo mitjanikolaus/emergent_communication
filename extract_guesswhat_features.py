@@ -12,11 +12,12 @@ from h5py import string_dtype
 from matplotlib.patches import Rectangle
 from torch import nn
 
-from torchvision.models import resnet50, ResNet50_Weights
-from torchvision.transforms import transforms
+from torchvision.models import resnet50, ResNet50_Weights, ViT_B_16_Weights
+from torchvision.models.feature_extraction import create_feature_extractor
+from torchvision.models.vision_transformer import vit_b_16
 from tqdm import tqdm
 
-from utils import RESNET_IMG_FEATS_DIM, H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR_GUESSWHAT
+from utils import RESNET_IMG_FEATS_DIM, ViT_IMG_FEATS_DIM, H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR_GUESSWHAT
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -72,27 +73,33 @@ def get_spatial_feat(bbox, im_width, im_height):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--min-area-in-pixels", type=int, default="500")
+    parser.add_argument("--model", type=str, default="resnet")
+
     args = parser.parse_args()
 
     for split in ["train", "validation"]:
         ds = load_zoo_dataset("coco-2014", split=split)
 
-        with h5py.File(os.path.join(DATA_DIR_GUESSWHAT, f"{split}_features_{str(args.min_area_in_pixels)}.hdf5"), 'w') as h5_db:
-            resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
-            modules = list(resnet.children())[:-1]
-            model = nn.Sequential(*modules)
+        with h5py.File(os.path.join(DATA_DIR_GUESSWHAT, f"{split}_features_{str(args.min_area_in_pixels)}_{args.model}.hdf5"), 'w') as h5_db:
+            if args.model == "resnet":
+                resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
+                modules = list(resnet.children())[:-1]
+                model = nn.Sequential(*modules)
+
+                preprocessing = ResNet50_Weights.DEFAULT.transforms()
+                feat_size = RESNET_IMG_FEATS_DIM
+            elif args.model == "vit":
+                vit = vit_b_16(weights=ViT_B_16_Weights.DEFAULT)
+                model = create_feature_extractor(vit, return_nodes=["encoder"])
+
+                preprocessing = ViT_B_16_Weights.DEFAULT.transforms()
+                feat_size = ViT_IMG_FEATS_DIM
+            else:
+                raise RuntimeError("Unknown model: ", args.model)
+
             for p in model.parameters():
                 p.requires_grad = False
             model = model.to(device)
-
-            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                             std=[0.229, 0.224, 0.225])
-
-            preprocessing = transforms.Compose([
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                normalize,
-            ])
 
             ids = []
             for sample in tqdm(ds):
@@ -131,9 +138,13 @@ if __name__ == '__main__':
 
                 images = torch.stack(images).to(device)
 
-                feats = model(images).squeeze().cpu().numpy()
+                if args.model == "resnet":
+                    feats = model(images).squeeze().cpu().numpy()
+                else:
+                    feats = model(images)["encoder"]
+                    feats = torch.mean(feats, dim=1).squeeze().cpu().numpy()
 
-                h5_features = h5_db.create_dataset(sample.id, (len(images), RESNET_IMG_FEATS_DIM), dtype=np.float32)
+                h5_features = h5_db.create_dataset(sample.id, (len(images), feat_size), dtype=np.float32)
 
                 h5_features[:] = feats
 
