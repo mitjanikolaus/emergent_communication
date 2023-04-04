@@ -102,8 +102,11 @@ if __name__ == '__main__':
             ids = []
             for sample in tqdm(ds):
                 img = PIL_Image.open(sample.filepath)
-                if not sample.ground_truth or img.mode != 'RGB':
+                if not sample.ground_truth:
                     continue
+
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
 
                 cropped_objects = []
                 for detection in sample.ground_truth.detections:

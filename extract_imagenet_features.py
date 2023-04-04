@@ -56,8 +56,8 @@ if __name__ == '__main__':
                 img_id = os.path.basename(filepath).replace(".JPEG", "")
 
                 img = PIL_Image.open(filepath)
-                if img.mode != 'RGB':
-                    continue
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
 
                 images_batch.append(img)
                 ids_batch.append(img_id)
