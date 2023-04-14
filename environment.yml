@@ -161,5 +161,6 @@ dependencies:
   - h5py
   - pytorch
   - torchaudio
-  - pytorch-cuda=11.8
+  - pytorch-cuda=11.7
   - torchvision
+  - torchmetrics
