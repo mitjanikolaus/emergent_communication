@@ -1,5 +1,6 @@
 import itertools
 import os
+import pickle
 import random
 
 import h5py
@@ -25,9 +26,10 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.discrimination_game = discrimination_game
         self.imagenet = imagenet
         self.use_test_set = test_set_size > 0
+        self.hard_distractors = hard_distractors
 
         self.collate_fn = None
-        if self.imagenet:
+        if self.imagenet and not self.hard_distractors:
             self.collate_fn = self.collate_add_batch_distractors
 
         objects = generate_objects(num_attributes, num_values, max_num_objects)
@@ -54,11 +56,11 @@ class SignalingGameDataModule(pl.LightningDataModule):
 
         elif imagenet:
             print("ImageNet Game")
-            self.train_dataset = SignalingGameImagenetDataset("train_features.hdf5", num_objects)
+            self.train_dataset = SignalingGameImagenetDataset("val_features.hdf5", num_objects, hard_distractors) # TODO testing with val
             val_dataset_file = "val_features.hdf5"
             if val_set_size <= 0:
                 val_dataset_file = "train_features.hdf5"
-            self.val_dataset = SignalingGameImagenetDataset(val_dataset_file, num_objects)
+            self.val_dataset = SignalingGameImagenetDataset(val_dataset_file, num_objects, hard_distractors)
             self.test_dataset = None
 
         else:
@@ -83,7 +85,7 @@ class SignalingGameDataModule(pl.LightningDataModule):
         if self.discrimination_game:
             shuffle = False
         return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
-                          shuffle=shuffle, collate_fn=self.collate_fn )
+                          shuffle=shuffle, collate_fn=self.collate_fn)
 
     def val_dataloader(self):
         validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
@@ -125,7 +127,6 @@ class SignalingGameDataModule(pl.LightningDataModule):
         labels = torch.stack(labels)
 
         return sender_objects, receiver_inputs, labels
-
 
 
 def generate_objects(num_attributes, num_values, max_num_objects):
@@ -199,10 +200,14 @@ class SignalingGameGuessWhatDataset(Dataset):
 
 class SignalingGameImagenetDataset(Dataset):
 
-    def __init__(self, file_name, num_objects):
+    def __init__(self, file_name, num_objects, hard_distractors=False):
         self.file_name = file_name
 
         self.num_objects = num_objects
+
+        self.hard_distractors = hard_distractors
+        if hard_distractors:
+            self.nns = pickle.load(open(os.path.join(DATA_DIR_IMAGENET, "nearest_neighors.p"), "rb"))
 
         self.h5_db = h5py.File(os.path.join(DATA_DIR_IMAGENET, self.file_name), 'r')
         self.h5_ids = self.h5_db[H5_IDS_KEY]
@@ -212,9 +217,28 @@ class SignalingGameImagenetDataset(Dataset):
         return len(self.h5_ids) - len(self.h5_ids) % 100
 
     def __getitem__(self, index):
-        target_id = self.h5_ids[index]
+        if self.hard_distractors:
+            target_id = self.h5_ids[index]
 
-        return torch.tensor(self.h5_db[target_id])
+            candidate_object_ids = self.nns[target_id]
+
+            random.shuffle(candidate_object_ids)
+            candidate_object_ids = candidate_object_ids[:self.num_objects]
+
+            target_position = random.choice(range(len(candidate_object_ids)))
+            label = target_position
+
+            candidate_objects = [torch.tensor(self.h5_db[id]) for id in candidate_object_ids]
+
+            receiver_input = torch.stack(candidate_objects)
+            sender_object = receiver_input[target_position]
+
+            return sender_object, receiver_input, label
+
+        else:
+            target_id = self.h5_ids[index]
+
+            return torch.tensor(self.h5_db[target_id])
 
 
 class SignalingGameDiscriminationDataset(IterableDataset):
