@@ -438,17 +438,11 @@ class SignalingGameModule(pl.LightningModule):
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
                  sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
-                 vocab_size=5, noise=0, feedback=False, self_repair=False, vocab_size_feedback=3,
+                 vocab_size=5, noise=0, feedback=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False,
                  discrimination_game=False, guesswhat=False, imagenet=False, **kwargs):
         super().__init__()
-        if self_repair and feedback:
-            raise ValueError("Can't set both self_repair and feedback at the same time!")
-
-        if self_repair and not vocab_size_feedback == 2:
-            print("Self-repair mode, setting vocab_size_feedback to 2!")
-            vocab_size_feedback = 2
 
         self.input_size = num_attributes * num_values
         if guesswhat or imagenet:
@@ -520,7 +514,6 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
 
         parser.add_argument("--noise", type=float, default=0)
-        parser.add_argument("--self-repair", default=False, action="store_true")
         parser.add_argument("--feedback", default=False, action="store_true")
 
         parser.add_argument("--log-topsim-on-validation", default=False, action="store_true")
@@ -700,8 +693,6 @@ class SignalingGameModule(pl.LightningModule):
             receiver_logits.append(receiver_step_logits)
             input_feedback = receiver_output_tokens.detach()
             messages_receiver.append(receiver_output_tokens)
-        elif self.params.self_repair:
-            input_feedback = (sender_output_tokens_detached == self.token_noise).long()
         else:
             input_feedback = None
 
@@ -725,9 +716,6 @@ class SignalingGameModule(pl.LightningModule):
                 messages_receiver.append(receiver_output_tokens)
 
                 input_feedback = receiver_output_tokens.detach()
-
-            elif self.params.self_repair:
-                input_feedback = (sender_output_tokens_detached == self.token_noise).long()
 
         messages_sender = torch.stack(messages_sender).permute(1, 0)
         sender_logits = torch.stack(sender_logits).permute(1, 0)
@@ -859,8 +847,6 @@ class SignalingGameModule(pl.LightningModule):
 
             if self.params.feedback:
                 input_feedback = receiver_output_tokens.detach()
-            elif self.params.self_repair:
-                input_feedback = (sender_output_tokens_detached == self.token_noise).long()
             else:
                 input_feedback = None
 
@@ -888,8 +874,6 @@ class SignalingGameModule(pl.LightningModule):
                         receiver_entropies.append(receiver_step_entropy)
                         receiver_logits.append(receiver_step_logits)
                         messages_receiver.append(receiver_output_tokens)
-                    elif self.params.self_repair:
-                        input_feedback = (sender_output_tokens_detached == self.token_noise).long()
 
                     sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_feedback)
 
@@ -920,9 +904,6 @@ class SignalingGameModule(pl.LightningModule):
                         receiver_entropies.append(receiver_step_entropy)
                         receiver_logits.append(receiver_step_logits)
                         messages_receiver.append(receiver_output_tokens)
-
-                    elif self.params.self_repair:
-                        input_feedback = (sender_output_tokens_detached == self.token_noise).long()
 
             receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
 
