@@ -26,7 +26,6 @@ def run(config):
                                          batch_size=config.batch_size,
                                          num_workers=config.num_workers,
                                          seed=config.seed,
-                                         discrimination_game=config.discrimination_game,
                                          num_objects=config.discrimination_num_objects,
                                          hard_distractors=config.hard_distractors,
                                          guesswhat=config.guesswhat,

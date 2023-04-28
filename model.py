@@ -73,98 +73,10 @@ class LayerNormGRUCell(nn.Module):
 class Receiver(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
-            feedback, vocab_size_feedback
-    ):
-        super(Receiver, self).__init__()
-
-        # Add one symbol for noise treatment
-        vocab_size_perception = vocab_size + 1
-
-        self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
-
-        self.embedding = nn.Embedding(vocab_size_perception, embed_dim)
-
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.max_len = max_len
-
-        if layer_norm:
-            rnn_cell = LayerNormGRUCell
-        else:
-            rnn_cell = GRUCell
-
-        self.feedback_cells = nn.ModuleList(
-            [
-                rnn_cell(input_size=embed_dim, hidden_size=hidden_size)
-                if i == 0
-                else rnn_cell(input_size=hidden_size, hidden_size=hidden_size)
-                for i in range(num_layers)
-            ]
-        )
-
-        self.hidden_to_output = nn.Linear(hidden_size, vocab_size_feedback)
-
-        self.linear_out = nn.Linear(hidden_size, input_size)
-
-        self.feedback = feedback
-
-    def reset_parameters(self):
-        for layer in self.children():
-            if hasattr(layer, 'reset_parameters'):
-                layer.reset_parameters()
-            else:
-                for module in layer:
-                    module.reset_parameters()
-
-    def forward_first_turn(self, messages):
-        batch_size = messages.shape[0]
-
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size), dtype=torch.float, device=messages.device) for _ in
-                       range(self.num_layers)]
-
-        return self.forward(messages, prev_hidden)
-
-    def forward(self, messages, prev_hidden):
-        rnn_input = self.embedding(messages)
-
-        for i, layer in enumerate(self.feedback_cells):
-            h_t = layer(rnn_input, prev_hidden[i])
-            prev_hidden[i] = h_t
-            rnn_input = h_t
-
-        if self.feedback:
-            step_probs = F.softmax(self.hidden_to_output(h_t), dim=1)
-            distr = Categorical(probs=step_probs)
-            entropy = distr.entropy()
-
-            if self.training:
-                output_token = distr.sample()
-            else:
-                output_token = step_probs.argmax(dim=1)
-
-            logits = distr.log_prob(output_token)
-        else:
-            output_token = None
-            entropy = None
-            logits = None
-
-        return output_token, entropy, logits, prev_hidden
-
-    def output(self, hidden_states, message_lengths):
-        batch_size = hidden_states.shape[0]
-
-        hidden_states_last_token = hidden_states[range(batch_size), message_lengths - 1]
-
-        return self.linear_out(hidden_states_last_token)
-
-
-class ReceiverDiscrimination(nn.Module):
-    def __init__(
-            self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
             feedback, vocab_size_feedback, object_attention, output_attention, discrimination_num_objects,
             noise=False
     ):
-        super(ReceiverDiscrimination, self).__init__()
+        super(Receiver, self).__init__()
 
         self.vocab_size = vocab_size
         vocab_size_perception = vocab_size
@@ -441,18 +353,16 @@ class SignalingGameModule(pl.LightningModule):
                  vocab_size=5, noise=0, feedback=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False,
-                 discrimination_game=False, guesswhat=False, imagenet=False, **kwargs):
+                 guesswhat=False, imagenet=False, **kwargs):
         super().__init__()
 
         self.input_size = num_attributes * num_values
         if guesswhat or imagenet:
             self.input_size = RESNET_IMG_FEATS_DIM
-            discrimination_game = True
 
         self.save_hyperparameters()
         self.params = AttributeDict(self.hparams)
 
-        self.discrimination_game = discrimination_game
         self.guesswhat = guesswhat
         self.imagenet = imagenet
 
@@ -488,8 +398,7 @@ class SignalingGameModule(pl.LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("model")
-        parser.add_argument("--discrimination-game", default=False, action="store_true")
-        parser.add_argument("--discrimination-num-objects", type=int, default=10)
+        parser.add_argument("--discrimination-num-objects", type=int, default=2)
         parser.add_argument("--hard-distractors", default=False, action="store_true")
 
         parser.add_argument("--receiver-starts", default=False, action="store_true")
@@ -563,30 +472,18 @@ class SignalingGameModule(pl.LightningModule):
                         for _ in range(self.params.num_senders)
                     ]
                 )
-            if self.params.discrimination_game:
-                self.receivers = ModuleList(
-                    [
-                        ReceiverDiscrimination(self.params.vocab_size, self.params.receiver_embed_dim,
-                                 self.params.receiver_hidden_dim, self.params.max_len,
-                                 self.input_size,
-                                 self.params.receiver_layer_norm, self.params.receiver_num_layers,
-                                 self.params.feedback, self.params.vocab_size_feedback,
-                                 self.params.receiver_object_attention,
-                                 self.params.receiver_output_attention, self.params.discrimination_num_objects)
-                        for _ in range(self.params.num_receivers)
-                    ]
-                )
-            else:
-                self.receivers = ModuleList(
-                    [
-                        Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
-                                 self.params.receiver_hidden_dim, self.params.max_len,
-                                 self.input_size,
-                                 self.params.receiver_layer_norm, self.params.receiver_num_layers,
-                                 self.params.feedback, self.params.vocab_size_feedback)
-                        for _ in range(self.params.num_receivers)
-                    ]
-                )
+            self.receivers = ModuleList(
+                [
+                    Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
+                             self.params.receiver_hidden_dim, self.params.max_len,
+                             self.input_size,
+                             self.params.receiver_layer_norm, self.params.receiver_num_layers,
+                             self.params.feedback, self.params.vocab_size_feedback,
+                             self.params.receiver_object_attention,
+                             self.params.receiver_output_attention, self.params.discrimination_num_objects)
+                    for _ in range(self.params.num_receivers)
+                ]
+            )
 
     def freeze_senders(self):
         for sender in self.senders:
@@ -654,157 +551,6 @@ class SignalingGameModule(pl.LightningModule):
         self.log(f"train_acc", acc.float().mean(), prog_bar=True, add_dataloader_idx=False)
 
     def forward(self, batch, sender_idx, receiver_idx, return_messages=False, disable_noise=False):
-        if self.discrimination_game:
-            return self.forward_discrimination(batch, sender_idx, receiver_idx, return_messages, disable_noise)
-        else:
-            return self.forward_reconstruction(batch, sender_idx, receiver_idx, return_messages, disable_noise)
-
-    def forward_reconstruction(
-        self, sender_input, sender_idx, receiver_idx, return_messages=False, disable_noise=False
-    ):
-        sender = self.senders[sender_idx]
-        receiver = self.receivers[receiver_idx]
-        batch_size = sender_input.shape[0]
-
-        messages_sender = []
-        original_messages_sender = []
-        sender_logits = []
-        sender_entropies = []
-
-        receiver_entropies = []
-        receiver_hidden_states = torch.zeros((batch_size, self.params.max_len, self.params.receiver_hidden_dim)).type_as(sender_input)
-        messages_receiver = []
-        receiver_logits = []
-
-        sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_first_turn(sender_input)
-        sender_entropies.append(sender_step_entropy)
-        sender_logits.append(sender_step_logits)
-        original_messages_sender.append(sender_output_tokens)
-
-        sender_output_tokens_detached = sender_output_tokens.detach().clone()
-        sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
-        messages_sender.append(sender_output_tokens_detached)
-
-        receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(
-            sender_output_tokens_detached)
-        receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
-        if self.params.feedback:
-            receiver_entropies.append(receiver_step_entropy)
-            receiver_logits.append(receiver_step_logits)
-            input_feedback = receiver_output_tokens.detach()
-            messages_receiver.append(receiver_output_tokens)
-        else:
-            input_feedback = None
-
-        for step in range(1, self.params.max_len):
-            sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_feedback)
-
-            sender_entropies.append(sender_step_entropy)
-            sender_logits.append(sender_step_logits)
-            original_messages_sender.append(sender_output_tokens)
-
-            sender_output_tokens_detached = sender_output_tokens.detach().clone()
-            sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
-            messages_sender.append(sender_output_tokens_detached)
-
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_subsequent_turn(
-                sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
-            receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
-            if self.params.feedback:
-                receiver_entropies.append(receiver_step_entropy)
-                receiver_logits.append(receiver_step_logits)
-                messages_receiver.append(receiver_output_tokens)
-
-                input_feedback = receiver_output_tokens.detach()
-
-        messages_sender = torch.stack(messages_sender).permute(1, 0)
-        sender_logits = torch.stack(sender_logits).permute(1, 0)
-        sender_entropies = torch.stack(sender_entropies).permute(1, 0)
-
-        messages_sender_lengths = find_lengths(messages_sender)
-        self.log(f"message_lengths", messages_sender_lengths.float().mean())
-
-        if self.params.feedback:
-            messages_receiver = torch.stack(messages_receiver).permute(1, 0)
-            receiver_logits = torch.stack(receiver_logits).permute(1, 0)
-            receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
-
-            messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
-            self.log(f"receiver_message_lengths", messages_receiver_lengths.float().mean())
-
-        for i in range(messages_sender.size(1)):
-            sender_entropies[i >= messages_sender_lengths, i] = 0
-            sender_logits[i >= messages_sender_lengths, i] = 0
-        effective_entropy_s_1 = sender_entropies.sum(dim=1) / messages_sender_lengths.float()
-        effective_log_prob_s = sender_logits.sum(dim=1)
-
-        entropy_loss = effective_entropy_s_1 * self.sender_entropy_coeff
-
-        baseline = self.baselines["length_sender_1"].predict(messages_sender_lengths.device)
-        policy_length_loss = (messages_sender_lengths.float() - baseline) * self.length_cost * effective_log_prob_s
-
-        receiver_output = receiver.output(receiver_hidden_states, messages_sender_lengths)
-
-        receiver_output = receiver_output.view(batch_size, self.num_attributes, self.num_values)
-
-        sender_input = sender_input.view(batch_size, self.num_attributes, self.num_values)
-
-        acc = (torch.sum((receiver_output.argmax(dim=-1) == sender_input.argmax(dim=-1)).detach(), dim=1) == self.num_attributes).float()
-
-        receiver_output = receiver_output.view(batch_size * self.num_attributes, self.num_values)
-
-        labels = sender_input.argmax(dim=-1).view(batch_size * self.num_attributes)
-        receiver_loss = F.cross_entropy(receiver_output, labels, reduction="none").view(batch_size, self.num_attributes).mean(dim=-1)
-
-        self.log(f"receiver_loss", receiver_loss.mean())
-        assert len(receiver_loss) == batch_size
-
-        if self.params.feedback:
-            # TODO: does not work with current messages_receiver_lengths (as they ignore eos tokens)
-            # for i in range(messages_receiver.size(1)):
-            #     receiver_entropies[i >= messages_receiver_lengths, i] = 0
-            #     receiver_logits[i >= messages_receiver_lengths, i] = 0
-            effective_entropy_r = receiver_entropies.sum(dim=1) / messages_receiver_lengths.float()
-            effective_log_prob_r = receiver_logits.sum(dim=1)
-
-            entropy_loss = (effective_entropy_s_1 * self.sender_entropy_coeff
-                                + effective_entropy_r * self.receiver_entropy_coeff)
-
-            baseline = self.baselines["length_receiver_1"].predict(messages_receiver_lengths.device)
-            policy_length_loss += (messages_receiver_lengths.float() - baseline) * self.length_cost * effective_log_prob_r
-
-        self.log(f"entropy_loss", entropy_loss.mean())
-
-        loss_baseline = self.baselines["loss"].predict(receiver_loss.device)
-        policy_loss = (
-            (receiver_loss.detach() - loss_baseline) * effective_log_prob_s
-        )
-
-        self.log(f"policy_loss", policy_loss.mean())
-        self.log(f"policy_length_loss", policy_length_loss.mean())
-
-        optimized_loss = policy_length_loss + policy_loss - entropy_loss
-
-        # average over items in batch
-        optimized_loss = optimized_loss.mean()
-
-        # add the differentiable loss terms
-        optimized_loss += receiver_loss.mean()
-
-        if self.training:
-            self.baselines["loss"].update(receiver_loss)
-            self.baselines["length_sender"].update(messages_sender_lengths.float())
-            if self.params.feedback:
-                self.baselines["length_receiver"].update(messages_receiver_lengths.float())
-
-        if return_messages:
-            return optimized_loss, acc, messages_sender
-        else:
-            return optimized_loss, acc
-
-    def forward_discrimination(
-        self, batch, sender_idx, receiver_idx, return_messages=False, disable_noise=False
-    ):
         sender_input, receiver_input, labels = batch
 
         sender = self.senders[sender_idx]
@@ -1092,10 +838,7 @@ class SignalingGameModule(pl.LightningModule):
         if is_best_checkpoint:
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
 
-        if self.discrimination_game:
-            meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
-        else:
-            meanings = torch.cat([meaning.cpu() for meaning, _, _ in language_analysis_results])
+        meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
         self.analyze_language(messages, meanings, is_best_checkpoint)
 
@@ -1112,18 +855,14 @@ class SignalingGameModule(pl.LightningModule):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
-        if self.discrimination_game:
-            # TODO msgs depend on feedback!
-            unique_meanings, indices = torch.unique(meanings, dim=0, return_inverse=True)
-            unique_meanings = unique_meanings[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
-            unique_messages = []
-            for i in range(len(unique_meanings)):
-                unique_messages.append(messages[indices == i][0])
-            messages = torch.stack(unique_messages)
-            meanings = unique_meanings
-        else:
-            meanings = meanings[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
-            messages = messages[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
+        # TODO msgs depend on feedback!
+        unique_meanings, indices = torch.unique(meanings, dim=0, return_inverse=True)
+        unique_meanings = unique_meanings[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
+        unique_messages = []
+        for i in range(len(unique_meanings)):
+            unique_messages.append(messages[indices == i][0])
+        messages = torch.stack(unique_messages)
+        meanings = unique_meanings
         # TODO: command line arg:
         # if is_best_checkpoint or self.force_log:
             # meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)

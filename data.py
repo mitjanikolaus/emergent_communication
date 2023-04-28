@@ -14,7 +14,7 @@ from utils import H5_IDS_KEY, DATA_DIR_GUESSWHAT, DATA_DIR_IMAGENET
 
 class SignalingGameDataModule(pl.LightningDataModule):
     def __init__(self, num_attributes, num_values, max_num_objects, val_set_size, test_set_size, batch_size,
-                 num_workers, seed, discrimination_game=False, num_objects=10, hard_distractors=False, guesswhat=False,
+                 num_workers, seed, num_objects=10, hard_distractors=False, guesswhat=False,
                  imagenet=False):
         super().__init__()
         self.num_attributes = num_attributes
@@ -23,7 +23,6 @@ class SignalingGameDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.max_num_objects = max_num_objects
         self.num_objects = num_objects
-        self.discrimination_game = discrimination_game
         self.imagenet = imagenet
         self.use_test_set = test_set_size > 0
         self.hard_distractors = hard_distractors
@@ -69,23 +68,14 @@ class SignalingGameDataModule(pl.LightningDataModule):
             if self.use_test_set:
                 print(f"Num objects in test: ", len(objects_test))
 
-            if self.discrimination_game:
-                self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
-                self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
-                if self.use_test_set:
-                    self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
-            else:
-                self.train_dataset = SignalingGameDataset(objects_train)
-                self.val_dataset = SignalingGameDataset(objects_val)
-                if self.use_test_set:
-                    self.test_dataset = SignalingGameDataset(objects_test)
+            self.train_dataset = SignalingGameDiscriminationDataset(objects_train, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
+            self.val_dataset = SignalingGameDiscriminationDataset(objects_val, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
+            if self.use_test_set:
+                self.test_dataset = SignalingGameDiscriminationDataset(objects_test, num_objects, max_num_objects, num_attributes, num_values, hard_distractors)
 
     def train_dataloader(self):
-        shuffle = True
-        if self.discrimination_game:
-            shuffle = False
         return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
-                          shuffle=shuffle, collate_fn=self.collate_fn)
+                          shuffle=False, collate_fn=self.collate_fn)
 
     def val_dataloader(self):
         validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
