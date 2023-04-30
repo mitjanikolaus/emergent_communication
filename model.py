@@ -121,8 +121,6 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.linear_objects_2 = nn.Linear(input_size, hidden_size)
-
         self.attn = nn.Linear(hidden_size, max_len * hidden_size)
         self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
 
@@ -206,20 +204,20 @@ class Receiver(nn.Module):
     def output(self, candidate_objects, hidden_states, message_lengths):
         batch_size = hidden_states.shape[0]
 
-        embedded_objects = self.linear_objects_2(candidate_objects)
+        embedded_objects = self.linear_objects_in(candidate_objects)
 
         if self.output_attention:
             hidden_states = self.hidden_to_objects_mul(hidden_states)
 
             for i in range(self.max_len):
-                hidden_states[i > message_lengths, i] = 0
+                hidden_states[i >= message_lengths, i] = 0
 
             hidden_states_summary = torch.mean(hidden_states, dim=1)
             attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, self.max_len, -1), dim=1)
 
             hidden_states_transformed = torch.sum(hidden_states * attn_weights, dim=1)
         else:
-            last_hidden_states = hidden_states[range(batch_size), message_lengths]
+            last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
             hidden_states_transformed = self.hidden_to_objects_mul(last_hidden_states)
 
         output = torch.matmul(embedded_objects, hidden_states_transformed.unsqueeze(2))
@@ -414,11 +412,11 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--baseline-type", type=str, default="mean")
 
         parser.add_argument("--num-attributes", type=int, default=4)
-        parser.add_argument("--num-values", type=int, default=4)
+        parser.add_argument("--num-values", type=int, default=100)
         parser.add_argument("--num-senders", type=int, default=1)
         parser.add_argument("--num-receivers", type=int, default=1)
-        parser.add_argument("--vocab-size", type=int, default=5)    # Including the EOS token!
-        parser.add_argument("--vocab-size-feedback", type=int, default=3)
+        parser.add_argument("--vocab-size", type=int, default=101)    # Including the EOS token!
+        parser.add_argument("--vocab-size-feedback", type=int, default=100)
         parser.add_argument("--max-len", type=int, default=4)   # Excluding EOS token!
         parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
 
@@ -685,7 +683,10 @@ class SignalingGameModule(pl.LightningModule):
 
         reward_baseline = self.baselines["reward"].predict(sender_input.device)
 
-        receiver_output = receiver.output(receiver_input, receiver_hidden_states, messages_sender_lengths)
+        last_time_steps = messages_sender_lengths.numpy().copy()
+        if self.params.receiver_starts:
+            last_time_steps += 1
+        receiver_output = receiver.output(receiver_input, receiver_hidden_states, last_time_steps)
         rewards = (receiver_output.argmax(dim=1) == labels).detach().float()
 
         receiver_output_loss = F.cross_entropy(receiver_output, labels)
