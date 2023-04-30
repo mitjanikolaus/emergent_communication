@@ -683,7 +683,7 @@ class SignalingGameModule(pl.LightningModule):
 
         reward_baseline = self.baselines["reward"].predict(sender_input.device)
 
-        last_time_steps = messages_sender_lengths.numpy().copy()
+        last_time_steps = messages_sender_lengths.cpu().numpy().copy()
         if self.params.receiver_starts:
             last_time_steps += 1
         receiver_output = receiver.output(receiver_input, receiver_hidden_states, last_time_steps)
