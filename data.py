@@ -246,7 +246,7 @@ class SignalingGameDiscriminationDataset(IterableDataset):
         label = target_position
         if self.hard_distractors:
             target_object = random.choice(self.objects)
-            candidate_objects = []
+            candidate_objects = [target_object]
 
             attr_informative = random.choice(range(self.num_attributes))
 
@@ -275,7 +275,6 @@ class SignalingGameDiscriminationDataset(IterableDataset):
                 candidate_objects.append(distractor)
 
             candidate_objects = list(candidate_objects)
-            candidate_objects[target_position] = target_object
         else:
             candidate_objects = random.sample(self.objects, self.num_objects)
         receiver_input = torch.stack(candidate_objects)
