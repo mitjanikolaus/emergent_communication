@@ -247,24 +247,34 @@ class SignalingGameDiscriminationDataset(IterableDataset):
         if self.hard_distractors:
             target_object = random.choice(self.objects)
             candidate_objects = []
+
+            attr_informative = random.choice(range(self.num_attributes))
+
+            # Values that are already taken
+            distractor_values = set()
+            # Add the target value
+            target_attr_inf_value = torch.nonzero(target_object[attr_informative * self.num_values:(attr_informative + 1) * self.num_values])[0].item()
+            distractor_values.add(target_attr_inf_value)
             while len(candidate_objects) < self.num_objects:
-                attrs_uninformative = random.sample(range(self.num_attributes), k=self.num_attributes - 1)
                 distractor = torch.zeros((self.num_attributes, self.num_values))
                 for attr in range(self.num_attributes):
-                    if attr in attrs_uninformative:
+                    if attr != attr_informative:
                         # Take the target objects value
                         val = torch.nonzero(target_object[attr * self.num_values:(attr + 1) * self.num_values])[0]
                     else:
-                        val = random.choice(range(self.num_values))
                         # Ensure that the value is different from the target objects value
-                        while val == torch.nonzero(target_object[attr * self.num_values:(attr + 1) * self.num_values])[0].item():
-                            val = random.choice(range(self.num_values))
+                        possible_values = set(range(self.num_values)) - distractor_values
+                        if len(possible_values) == 0:
+                            raise RuntimeError(f"Not enough values ({self.num_values}) available to create sufficient distractors ({self.num_objects})")
+                        val = random.choice(list(possible_values))
+                        distractor_values.add(val)
 
                     distractor[attr, val] = 1
 
                 distractor = distractor.view(-1)
                 candidate_objects.append(distractor)
 
+            candidate_objects = list(candidate_objects)
             candidate_objects[target_position] = target_object
         else:
             candidate_objects = random.sample(self.objects, self.num_objects)
