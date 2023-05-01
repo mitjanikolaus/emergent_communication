@@ -681,8 +681,6 @@ class SignalingGameModule(pl.LightningModule):
 
         policy_length_loss = (messages_sender_lengths.float() * self.length_cost * effective_log_prob_s).mean()
 
-        reward_baseline = self.baselines["reward"].predict(sender_input.device)
-
         last_time_steps = messages_sender_lengths.cpu().numpy().copy()
         if self.params.receiver_starts:
             last_time_steps += 1
@@ -709,17 +707,16 @@ class SignalingGameModule(pl.LightningModule):
 
         self.log(f"entropy_loss", sender_entropy_loss)
 
-        sender_policy_loss = (- rewards * effective_log_prob_s).mean()
+        baseline_reward = self.baselines["reward"].predict().to(sender_input.device)
 
-        if self.params.baseline_type == "none":
-            baseline_loss = 0
-        else:
-            baseline_loss = torch.square(rewards - reward_baseline).mean()
+        # The loss is based on the negative reward
+        loss = - (rewards - baseline_reward)
+        sender_policy_loss = (loss * effective_log_prob_s).mean()
 
         self.log(f"sender_policy_loss", sender_policy_loss)
         self.log(f"sender_policy_length_loss", policy_length_loss)
 
-        sender_loss = sender_policy_loss + baseline_loss + policy_length_loss - sender_entropy_loss
+        sender_loss = sender_policy_loss + policy_length_loss - sender_entropy_loss
 
         loss = sender_loss + receiver_loss
 
