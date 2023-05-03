@@ -2,7 +2,7 @@ import itertools
 import math
 import random
 from collections import defaultdict
-
+import pandas as pd
 import torch
 from pytorch_lightning.utilities import AttributeDict
 from torch import nn
@@ -184,7 +184,8 @@ class Receiver(nn.Module):
             rnn_input = h_t
 
         if self.feedback:
-            step_probs = F.softmax(self.hidden_to_feedback_output(h_t), dim=1)
+            logits = self.hidden_to_feedback_output(h_t)
+            step_probs = F.softmax(logits, dim=1)
             distr = Categorical(probs=step_probs)
 
             if self.training:
@@ -193,13 +194,14 @@ class Receiver(nn.Module):
                 output_token = step_probs.argmax(dim=1)
 
             entropy = distr.entropy()
-            logits = distr.log_prob(output_token)
+            output_token_logits = distr.log_prob(output_token)
         else:
             output_token = None
             entropy = None
+            output_token_logits = None
             logits = None
 
-        return output_token, entropy, logits, prev_hidden
+        return output_token, entropy, output_token_logits, logits, prev_hidden
 
     def output(self, candidate_objects, hidden_states, message_lengths):
         batch_size = hidden_states.shape[0]
@@ -470,6 +472,10 @@ class SignalingGameModule(pl.LightningModule):
                         for _ in range(self.params.num_senders)
                     ]
                 )
+
+            noise = False
+            if self.params.noise > 0:
+                noise = True
             self.receivers = ModuleList(
                 [
                     Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
@@ -478,7 +484,7 @@ class SignalingGameModule(pl.LightningModule):
                              self.params.receiver_layer_norm, self.params.receiver_num_layers,
                              self.params.feedback, self.params.vocab_size_feedback,
                              self.params.receiver_object_attention,
-                             self.params.receiver_output_attention, self.params.discrimination_num_objects)
+                             self.params.receiver_output_attention, self.params.discrimination_num_objects, noise)
                     for _ in range(self.params.num_receivers)
                 ]
             )
@@ -566,7 +572,7 @@ class SignalingGameModule(pl.LightningModule):
         receiver_logits = []
 
         if self.params.receiver_starts:
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_first_turn_logits, receiver_prev_hidden = receiver.forward_first_turn(
                 receiver_input)
 
             if self.params.feedback:
@@ -586,7 +592,7 @@ class SignalingGameModule(pl.LightningModule):
             sender_output_tokens_detached = sender_output_tokens.detach().clone()
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
 
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_first_turn(receiver_input,
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_first_turn_logits, receiver_prev_hidden = receiver.forward_first_turn(receiver_input,
                 sender_output_tokens_detached)
 
             if self.params.feedback:
@@ -607,7 +613,7 @@ class SignalingGameModule(pl.LightningModule):
 
         for step in range(1, self.params.max_len):
             if self.params.receiver_starts:
-                receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_subsequent_turn(
+                receiver_output_tokens, receiver_step_entropy, receiver_step_logits, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
                     sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
 
                 # Do sender forward pass only if we're not in the last iteration (as we want to finish with a receiver
@@ -639,7 +645,7 @@ class SignalingGameModule(pl.LightningModule):
                 sender_logits.append(sender_step_logits)
                 original_messages_sender.append(sender_output_tokens)
 
-                receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_prev_hidden = receiver.forward_subsequent_turn(
+                receiver_output_tokens, receiver_step_entropy, receiver_step_logits, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
                     sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
 
                 if not step == self.params.max_len - 1:
@@ -702,6 +708,15 @@ class SignalingGameModule(pl.LightningModule):
             receiver_loss += receiver_policy_loss
 
             receiver_loss -= receiver_entropy_loss
+
+            # receiver_aux_loss = F.cross_entropy(receiver_first_turn_logits, informative_attrs)
+            #
+            # self.log(f"receiver_aux_loss", receiver_aux_loss)
+            #
+            # receiver_aux_acc = (receiver_first_turn_logits.argmax(dim=1) == informative_attrs).detach().float()
+            # self.log(f"receiver_aux_acc", receiver_aux_acc.mean())
+            #
+            # receiver_loss += 10 * receiver_aux_loss
 
         self.log(f"receiver_loss", receiver_loss)
 
@@ -785,14 +800,14 @@ class SignalingGameModule(pl.LightningModule):
 
         print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:")
 
-    def validation_step(self, sender_input, batch_idx, dataloader_idx):
+    def validation_step(self, batch, batch_idx, dataloader_idx):
         sender_idx = self.val_epoch_sender_idx
         receiver_idx = self.val_epoch_receiver_idx
         if dataloader_idx == 0:
             # Val Generalization
-            _, acc = self.forward(sender_input, sender_idx, receiver_idx)
+            _, acc = self.forward(batch, sender_idx, receiver_idx)
             if self.params.noise > 0:
-                _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
+                _, acc_no_noise = self.forward(batch, sender_idx, receiver_idx, disable_noise=True)
             else:
                 acc_no_noise = acc
 
@@ -801,15 +816,15 @@ class SignalingGameModule(pl.LightningModule):
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
             # TODO: do only if required for logging
-            _, acc_no_noise, messages = self.forward(sender_input, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
+            _, acc_no_noise, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
 
-            return sender_input, messages, acc_no_noise
+            return batch, messages, acc_no_noise
 
         elif dataloader_idx == 2:
             # Test Generalization
-            _, acc = self.forward(sender_input, sender_idx, receiver_idx)
+            _, acc = self.forward(batch, sender_idx, receiver_idx)
             if self.params.noise > 0:
-                _, acc_no_noise = self.forward(sender_input, sender_idx, receiver_idx, disable_noise=True)
+                _, acc_no_noise = self.forward(batch, sender_idx, receiver_idx, disable_noise=True)
             else:
                 acc_no_noise = acc
 
@@ -837,8 +852,9 @@ class SignalingGameModule(pl.LightningModule):
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
 
         meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
+        candidate_objects = torch.cat([candidates.cpu() for (_, candidates, _), _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
-        self.analyze_language(messages, meanings, is_best_checkpoint)
+        self.analyze_language(messages, meanings, candidate_objects, is_best_checkpoint)
 
         if len(validation_step_outputs) > 2:
             # Test Generalization:
@@ -849,7 +865,7 @@ class SignalingGameModule(pl.LightningModule):
             self.log("test_acc", test_acc, add_dataloader_idx=False)
             self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
 
-    def analyze_language(self, messages, meanings, is_best_checkpoint=False):
+    def analyze_language(self, messages, meanings, candidate_objects, is_best_checkpoint=False):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
@@ -862,13 +878,26 @@ class SignalingGameModule(pl.LightningModule):
         messages = torch.stack(unique_messages)
         meanings = unique_meanings
         # TODO: command line arg:
-        # if is_best_checkpoint or self.force_log:
-            # meanings_strings = pd.DataFrame(meanings).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
-            # num_digits = int(math.log10(self.params.vocab_size))
-            # messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
-            # messages_df = pd.DataFrame([meanings_strings, messages_strings]).T
-            # messages_df.rename(columns={0: 'meaning', 1: 'message'}, inplace=True)
-            # messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
+        # def transform_meaning(meaning):
+        #     return meaning.reshape(self.num_attributes, self.num_values).argmax(dim=1)
+        #
+        # meanings_transformed = [transform_meaning(m) for m in meanings]
+        # meanings_strings = pd.DataFrame(meanings_transformed).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+        #
+        # candidate_objects_0 = candidate_objects[:, 0, :]
+        # candidate_objects_1 = candidate_objects[:, 1, :]
+        # candidate_objects_0 = [transform_meaning(m) for m in candidate_objects_0]
+        # candidate_objects_1 = [transform_meaning(m) for m in candidate_objects_1]
+        #
+        # candidate_objects_0_strings = pd.DataFrame(candidate_objects_0).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+        # candidate_objects_1_strings = pd.DataFrame(candidate_objects_1).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+        #
+        # num_digits = int(math.log10(self.params.vocab_size))
+        # messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
+        # messages_df = pd.DataFrame([meanings_strings, messages_strings, candidate_objects_0_strings, candidate_objects_1_strings]).T
+        # messages_df.rename(columns={0: 'meaning', 1: 'message', 2: 'candidate 0', 3: 'candidate 1'}, inplace=True)
+        # messages_df.sort_values(by="message", inplace=True)
+        # messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
         if self.params.log_entropy_on_validation or self.force_log:
             entropy = compute_entropy(messages.numpy())
