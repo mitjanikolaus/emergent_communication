@@ -852,9 +852,8 @@ class SignalingGameModule(pl.LightningModule):
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
 
         meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
-        candidate_objects = torch.cat([candidates.cpu() for (_, candidates, _), _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
-        self.analyze_language(messages, meanings, candidate_objects, is_best_checkpoint)
+        self.analyze_language(messages, meanings, is_best_checkpoint)
 
         if len(validation_step_outputs) > 2:
             # Test Generalization:
@@ -865,7 +864,7 @@ class SignalingGameModule(pl.LightningModule):
             self.log("test_acc", test_acc, add_dataloader_idx=False)
             self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
 
-    def analyze_language(self, messages, meanings, candidate_objects, is_best_checkpoint=False):
+    def analyze_language(self, messages, meanings, is_best_checkpoint=False):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
