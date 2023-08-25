@@ -848,9 +848,9 @@ class SignalingGameModule(pl.LightningModule):
         # Language analysis (on train set data)
         language_analysis_results = validation_step_outputs[1]
         train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
-        self.log("train_acc_no_noise", train_acc_no_noise.float(), prog_bar=True, add_dataloader_idx=False)
+        self.log("train_acc_no_noise", train_acc_no_noise.float().mean(), prog_bar=True, add_dataloader_idx=False)
         if is_best_checkpoint:
-            self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise)
+            self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise.float().mean())
 
         meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
         messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
