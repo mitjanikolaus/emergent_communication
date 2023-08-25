@@ -432,16 +432,16 @@ class SignalingGameModule(pl.LightningModule):
 
         parser.add_argument("--sender-embed-dim", type=int, default=16)
         parser.add_argument("--sender-num-layers", type=int, default=1)
-        parser.add_argument("--sender-hidden-dim", type=int, default=256)
+        parser.add_argument("--sender-hidden-dim", type=int, default=128)
         parser.add_argument("--sender-learning-speed", type=float, default=1)
-        parser.add_argument("--sender-entropy-coeff", type=float, default=0.5)
+        parser.add_argument("--sender-entropy-coeff", type=float, default=0.1)
         parser.add_argument("--sender-layer-norm", default=False, action="store_true")
 
         parser.add_argument("--receiver-embed-dim", type=int, default=16)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
-        parser.add_argument("--receiver-hidden-dim", type=int, default=256)
+        parser.add_argument("--receiver-hidden-dim", type=int, default=128)
         parser.add_argument("--receiver-learning-speed", type=float, default=1)
-        parser.add_argument("--receiver-entropy-coeff", type=float, default=0.5)
+        parser.add_argument("--receiver-entropy-coeff", type=float, default=0.1)
         parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
         parser.add_argument("--receiver-output-attention", default=False, action="store_true")
         parser.add_argument("--receiver-object-attention", default=False, action="store_true")
@@ -559,7 +559,7 @@ class SignalingGameModule(pl.LightningModule):
 
         sender = self.senders[sender_idx]
         receiver = self.receivers[receiver_idx]
-        batch_size = sender_input.shape[0]
+
 
         messages_sender = []
         original_messages_sender = []
@@ -567,18 +567,21 @@ class SignalingGameModule(pl.LightningModule):
         sender_entropies = []
 
         receiver_entropies = []
-        receiver_hidden_states = torch.zeros((batch_size, self.params.max_len, self.params.receiver_hidden_dim)).type_as(sender_input)
+        receiver_hidden_states = []
         messages_receiver = []
         receiver_logits = []
+
+        if self.params.receiver_starts and not self.params.feedback:
+            raise RuntimeError("Cannot set 'receiver_starts' without setting 'feedback' option!")
 
         if self.params.receiver_starts:
             receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_first_turn_logits, receiver_prev_hidden = receiver.forward_first_turn(
                 receiver_input)
-
-            if self.params.feedback:
-                input_feedback = receiver_output_tokens.detach()
-            else:
-                input_feedback = None
+            input_feedback = receiver_output_tokens.detach()
+            receiver_entropies.append(receiver_step_entropy)
+            receiver_logits.append(receiver_step_logits)
+            messages_receiver.append(receiver_output_tokens)
+            receiver_hidden_states.append(receiver_prev_hidden[-1])
 
             sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_first_turn(
                 sender_input, input_feedback)
@@ -586,9 +589,10 @@ class SignalingGameModule(pl.LightningModule):
             sender_output_tokens_detached = sender_output_tokens.detach().clone()
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
 
+            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_first_turn_logits, receiver_prev_hidden = receiver.forward_first_turn(receiver_input,
+                sender_output_tokens_detached)
         else:
             sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_first_turn(sender_input)
-
             sender_output_tokens_detached = sender_output_tokens.detach().clone()
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
 
@@ -597,45 +601,25 @@ class SignalingGameModule(pl.LightningModule):
 
             if self.params.feedback:
                 input_feedback = receiver_output_tokens.detach()
-            else:
-                input_feedback = None
+                receiver_entropies.append(receiver_step_entropy)
+                receiver_logits.append(receiver_step_logits)
+                messages_receiver.append(receiver_output_tokens)
 
-        receiver_hidden_states[:, 0] = receiver_prev_hidden[-1]
+        receiver_hidden_states.append(receiver_prev_hidden[-1])
 
         sender_entropies.append(sender_step_entropy)
         sender_logits.append(sender_step_logits)
         messages_sender.append(sender_output_tokens_detached)
         original_messages_sender.append(sender_output_tokens)
+
+        step = 1
         if self.params.feedback:
-            receiver_entropies.append(receiver_step_entropy)
-            receiver_logits.append(receiver_step_logits)
-            messages_receiver.append(receiver_output_tokens)
+            step += 1
 
-        for step in range(1, self.params.max_len):
-            if self.params.receiver_starts:
-                receiver_output_tokens, receiver_step_entropy, receiver_step_logits, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
-                    sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
-
-                # Do sender forward pass only if we're not in the last iteration (as we want to finish with a receiver
-                # forward pass).
-                if not step == self.params.max_len - 1:
-                    if self.params.feedback:
-                        input_feedback = receiver_output_tokens.detach()
-                        receiver_entropies.append(receiver_step_entropy)
-                        receiver_logits.append(receiver_step_logits)
-                        messages_receiver.append(receiver_output_tokens)
-
-                    sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_feedback)
-
-                    sender_output_tokens_detached = sender_output_tokens.detach().clone()
-                    sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
-                    messages_sender.append(sender_output_tokens_detached)
-
-                    sender_entropies.append(sender_step_entropy)
-                    sender_logits.append(sender_step_logits)
-                    original_messages_sender.append(sender_output_tokens)
-            else:
-                sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_feedback)
+        for step in range(step, self.params.max_len):
+            if not self.params.feedback:
+                sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(
+                    sender_output_tokens, sender_prev_hidden, receiver_message=None)
 
                 sender_output_tokens_detached = sender_output_tokens.detach().clone()
                 sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
@@ -645,21 +629,36 @@ class SignalingGameModule(pl.LightningModule):
                 sender_logits.append(sender_step_logits)
                 original_messages_sender.append(sender_output_tokens)
 
-                receiver_output_tokens, receiver_step_entropy, receiver_step_logits, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
-                    sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
+                _, _, _, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
+                    sender_output_tokens_detached, receiver_prev_hidden)
+                receiver_hidden_states.append(receiver_prev_hidden[-1])
 
-                if not step == self.params.max_len - 1:
-                    if self.params.feedback:
-                        input_feedback = receiver_output_tokens.detach()
-                        receiver_entropies.append(receiver_step_entropy)
-                        receiver_logits.append(receiver_step_logits)
-                        messages_receiver.append(receiver_output_tokens)
+            else:
+                if (self.params.receiver_starts and step % 2 == 0) or \
+                        (not self.params.receiver_starts and step % 2 == 1):
+                    input_feedback = receiver_output_tokens.detach()
+                    receiver_entropies.append(receiver_step_entropy)
+                    receiver_logits.append(receiver_step_logits)
+                    messages_receiver.append(receiver_output_tokens)
+                else:
+                    sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(sender_output_tokens, sender_prev_hidden, input_feedback)
 
-            receiver_hidden_states[:, step] = receiver_prev_hidden[-1]
+                    sender_output_tokens_detached = sender_output_tokens.detach().clone()
+                    sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
+                    messages_sender.append(sender_output_tokens_detached)
+
+                    sender_entropies.append(sender_step_entropy)
+                    sender_logits.append(sender_step_logits)
+                    original_messages_sender.append(sender_output_tokens)
+
+                    receiver_output_tokens, receiver_step_entropy, receiver_step_logits, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
+                        sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
+                    receiver_hidden_states.append(receiver_prev_hidden[-1])
 
         messages_sender = torch.stack(messages_sender).permute(1, 0)
         sender_logits = torch.stack(sender_logits).permute(1, 0)
         sender_entropies = torch.stack(sender_entropies).permute(1, 0)
+        receiver_hidden_states = torch.stack(receiver_hidden_states).permute(1, 0, 2)
 
         messages_sender_lengths = find_lengths(messages_sender)
 
@@ -688,8 +687,10 @@ class SignalingGameModule(pl.LightningModule):
         policy_length_loss = (messages_sender_lengths.float() * self.length_cost * effective_log_prob_s).mean()
 
         last_time_steps = messages_sender_lengths.cpu().numpy().copy()
-        if self.params.receiver_starts:
-            last_time_steps += 1
+        if self.params.feedback:
+            last_time_steps = (last_time_steps / 2).astype(int) + 1
+            if self.params.receiver_starts:
+                last_time_steps += 1
         receiver_output = receiver.output(receiver_input, receiver_hidden_states, last_time_steps)
         rewards = (receiver_output.argmax(dim=1) == labels).detach().float()
 
