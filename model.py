@@ -900,7 +900,7 @@ class SignalingGameModule(pl.LightningModule):
         # messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
         if self.params.log_entropy_on_validation or self.force_log:
-            entropy = compute_entropy(messages.numpy())
+            entropy = compute_entropy(messages)
             self.log("message_entropy", entropy, prog_bar=True)
             print("message_entropy: ", entropy)
             if is_best_checkpoint:
