@@ -120,7 +120,9 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.attn = nn.Linear(hidden_size, max_len * hidden_size)
+        self.key = nn.Linear(hidden_size, hidden_size)
+        self.value = nn.Linear(hidden_size, hidden_size)
+        self.attention_output = nn.MultiheadAttention(hidden_size, 1, batch_first=True)
         self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
@@ -209,15 +211,17 @@ class Receiver(nn.Module):
 
         max_len = hidden_states.shape[1]
         if self.output_attention:
-            hidden_states = self.hidden_to_objects_mul(hidden_states)
 
             for i in range(max_len):
                 hidden_states[i >= message_lengths, i] = 0
 
-            hidden_states_summary = torch.mean(hidden_states, dim=1)
-            attn_weights = F.softmax(self.attn(hidden_states_summary).reshape(batch_size, max_len, -1), dim=1)
+            queries = torch.mean(hidden_states, dim=1, keepdim=True)
 
-            hidden_states_transformed = torch.sum(hidden_states * attn_weights, dim=1)
+            keys = self.key(hidden_states)
+            values = self.value(hidden_states)
+            attn_output, _ = self.attention_output(queries, keys, values, need_weights=False)
+
+            hidden_states_transformed = attn_output.squeeze()
         else:
             last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
             hidden_states_transformed = self.hidden_to_objects_mul(last_hidden_states)
