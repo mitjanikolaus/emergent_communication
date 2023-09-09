@@ -124,9 +124,11 @@ class Receiver(nn.Module):
             ]
         )
 
-        # self.key = nn.Linear(hidden_size, hidden_size)
-        # self.value = nn.Linear(hidden_size, hidden_size)
-        self.attention_output = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
+        self.keys_output = nn.Linear(hidden_size, hidden_size)
+        self.queries_output = nn.Linear(hidden_size, hidden_size)
+        self.attention_output = nn.MultiheadAttention(hidden_size, 1, batch_first=True)
+
+        self.attention_input = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
         self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
@@ -184,7 +186,7 @@ class Receiver(nn.Module):
         queries = sender_messages_embedded.unsqueeze(1)
         keys = self.linear_objects_in_keys(candidate_objects)
         values = self.linear_objects_in_values(candidate_objects)
-        rnn_input, _ = self.attention_output(queries, keys, values, need_weights=False)
+        rnn_input, _ = self.attention_input(queries, keys, values, need_weights=False)
         rnn_input = rnn_input.squeeze()
 
         if self.feedback:
@@ -221,7 +223,11 @@ class Receiver(nn.Module):
         embedded_objects = self.linear_objects_in(candidate_objects)
 
         if self.output_attention:
-            raise NotImplementedError()
+            queries = self.queries_output(hidden_states).mean(dim=1, keepdims=True)
+            keys = self.keys_output(hidden_states)
+            values = embedded_objects
+            hidden_states_transformed, _ = self.attention_output(queries, keys, values, need_weights=False)
+            hidden_states_transformed = hidden_states_transformed.squeeze()
         else:
             last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
             hidden_states_transformed = self.hidden_to_objects_mul(last_hidden_states)
