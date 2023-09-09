@@ -89,6 +89,10 @@ class Receiver(nn.Module):
         self.sos_embedding_perc = nn.Parameter(torch.zeros(embed_dim))
 
         self.linear_objects_in = nn.Linear(input_size, hidden_size)
+
+        self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
+        self.linear_objects_in_values = nn.Linear(input_size, embed_dim)
+
         self.attn_obj = nn.Linear(hidden_size, hidden_size * discrimination_num_objects)
 
         self.hidden_size = hidden_size
@@ -120,9 +124,9 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.key = nn.Linear(hidden_size, hidden_size)
-        self.value = nn.Linear(hidden_size, hidden_size)
-        self.attention_output = nn.MultiheadAttention(hidden_size, 1, batch_first=True)
+        # self.key = nn.Linear(hidden_size, hidden_size)
+        # self.value = nn.Linear(hidden_size, hidden_size)
+        self.attention_output = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
         self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
@@ -138,20 +142,21 @@ class Receiver(nn.Module):
     def forward_first_turn(self, candidate_objects, sender_messages=None):
         batch_size = candidate_objects.shape[0]
 
-        embedded_objects = self.linear_objects_in(candidate_objects)
-        embedded_objects_avg = torch.mean(embedded_objects, dim=1)
+        # embedded_objects = self.linear_objects_in(candidate_objects)
+        # embedded_objects_avg = torch.mean(embedded_objects, dim=1)
 
-        if self.object_attention:
-            attn_weights = F.softmax(
-                self.attn_obj(embedded_objects_avg).reshape(batch_size, -1, embedded_objects.shape[-1]), dim=1)
-            embedded_objects_transformed = torch.sum(attn_weights * embedded_objects, dim=1)
-        else:
-            embedded_objects_transformed = embedded_objects_avg
-
-        prev_hidden = [embedded_objects_transformed]
-        prev_hidden.extend(
-            [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
-        )
+        # if self.object_attention:
+        #     attn_weights = F.softmax(
+        #         self.attn_obj(embedded_objects_avg).reshape(batch_size, -1, embedded_objects.shape[-1]), dim=1)
+        #     embedded_objects_transformed = torch.sum(attn_weights * embedded_objects, dim=1)
+        # else:
+        #     embedded_objects_transformed = embedded_objects_avg
+        #
+        # prev_hidden = [embedded_objects_transformed]
+        # prev_hidden.extend(
+        #     [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
+        # )
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size), device=embedded_objects.device)  for _ in range(self.num_layers)]
 
         if sender_messages is None:
             messages_embedded = torch.stack([self.sos_embedding_perc] * batch_size)
@@ -161,23 +166,29 @@ class Receiver(nn.Module):
         if self.feedback:
             prev_receiver_messages = torch.stack([self.sos_embedding] * batch_size)
 
-            return self.forward(messages_embedded, prev_hidden, prev_receiver_messages)
+            return self.forward(messages_embedded, prev_hidden, candidate_objects, prev_receiver_messages)
         else:
-            return self.forward(messages_embedded, prev_hidden)
+            return self.forward(messages_embedded, prev_hidden, candidate_objects)
 
-    def forward_subsequent_turn(self, sender_messages, prev_hidden, prev_receiver_messages=None):
+    def forward_subsequent_turn(self, sender_messages, prev_hidden, candidate_objects, prev_receiver_messages=None):
         messages_embedded = self.embedding_sender(sender_messages)
         if self.feedback:
             prev_msg_embedding = self.embedding_receiver(prev_receiver_messages)
-            return self.forward(messages_embedded, prev_hidden, prev_msg_embedding)
+            return self.forward(messages_embedded, prev_hidden, candidate_objects, prev_msg_embedding)
         else:
-            return self.forward(messages_embedded, prev_hidden)
+            return self.forward(messages_embedded, prev_hidden, candidate_objects)
 
-    def forward(self, sender_messages_embedded, prev_hidden, prev_msg_embedding=None):
-        rnn_input = sender_messages_embedded
+    def forward(self, sender_messages_embedded, prev_hidden, candidate_objects, prev_msg_embedding=None):
+        # rnn_input = sender_messages_embedded
+
+        queries = sender_messages_embedded.unsqueeze(1)
+        keys = self.linear_objects_in_keys(candidate_objects)
+        values = self.linear_objects_in_values(candidate_objects)
+        rnn_input, _ = self.attention_output(queries, keys, values, need_weights=False)
+        rnn_input = rnn_input.squeeze()
 
         if self.feedback:
-            rnn_input = torch.cat((sender_messages_embedded, prev_msg_embedding), dim=-1)
+            rnn_input = torch.cat((rnn_input, prev_msg_embedding), dim=-1)
 
         for i, layer in enumerate(self.cells):
             h_t = layer(rnn_input, prev_hidden[i])
@@ -209,19 +220,8 @@ class Receiver(nn.Module):
 
         embedded_objects = self.linear_objects_in(candidate_objects)
 
-        max_len = hidden_states.shape[1]
         if self.output_attention:
-
-            for i in range(max_len):
-                hidden_states[i >= message_lengths, i] = 0
-
-            queries = torch.mean(hidden_states, dim=1, keepdim=True)
-
-            keys = self.key(hidden_states)
-            values = self.value(hidden_states)
-            attn_output, _ = self.attention_output(queries, keys, values, need_weights=False)
-
-            hidden_states_transformed = attn_output.squeeze()
+            raise NotImplementedError()
         else:
             last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
             hidden_states_transformed = self.hidden_to_objects_mul(last_hidden_states)
@@ -603,7 +603,7 @@ class SignalingGameModule(pl.LightningModule):
             sender_logits.append(sender_step_logits)
 
             receiver_output_tokens, receiver_step_entropy, receiver_step_logits, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
-                sender_output_tokens_detached, receiver_prev_hidden, receiver_output_tokens)
+                sender_output_tokens_detached, receiver_prev_hidden, receiver_input, receiver_output_tokens)
             receiver_hidden_states.append(receiver_prev_hidden[-1])
 
             if self.params.feedback:
