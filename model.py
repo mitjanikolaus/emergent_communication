@@ -88,7 +88,7 @@ class Receiver(nn.Module):
 
         self.sos_embedding_perc = nn.Parameter(torch.zeros(embed_dim))
 
-        self.linear_objects_in = nn.Linear(input_size, hidden_size)
+        self.linear_objects_in = nn.Linear(input_size, embed_dim)
 
         self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
         self.linear_objects_in_values = nn.Linear(input_size, embed_dim)
@@ -124,12 +124,12 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.keys_output = nn.Linear(hidden_size, hidden_size)
-        self.queries_output = nn.Linear(hidden_size, hidden_size)
-        self.attention_output = nn.MultiheadAttention(hidden_size, 1, batch_first=True)
+        self.keys_output = nn.Linear(hidden_size, embed_dim)
+        self.queries_output = nn.Linear(hidden_size, embed_dim)
+        self.attention_output = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
 
         self.attention_input = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
-        self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
+        self.hidden_to_objects_mul = nn.Linear(hidden_size, embed_dim)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
 
