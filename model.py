@@ -156,7 +156,7 @@ class Receiver(nn.Module):
         # prev_hidden.extend(
         #     [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
         # )
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size), device=embedded_objects.device)  for _ in range(self.num_layers)]
+        prev_hidden = [torch.zeros((batch_size, self.hidden_size), device=candidate_objects.device)  for _ in range(self.num_layers)]
 
         if sender_messages is None:
             messages_embedded = torch.stack([self.sos_embedding_perc] * batch_size)
