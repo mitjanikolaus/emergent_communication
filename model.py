@@ -69,6 +69,23 @@ class LayerNormGRUCell(nn.Module):
         return h_t
 
 
+class BahdanauAttention(nn.Module):
+    def __init__(self, hidden_size):
+        super(BahdanauAttention, self).__init__()
+        self.Wa = nn.Linear(hidden_size, hidden_size)
+        self.Ua = nn.Linear(hidden_size, hidden_size)
+        self.Va = nn.Linear(hidden_size, 1)
+
+    def forward(self, query, keys):
+        scores = self.Va(torch.tanh(self.Wa(query) + self.Ua(keys)))
+        scores = scores.squeeze(2).unsqueeze(1)
+
+        weights = F.softmax(scores, dim=-1)
+        context = torch.bmm(weights, keys)
+
+        return context, weights
+
+
 class Receiver(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
@@ -95,8 +112,6 @@ class Receiver(nn.Module):
 
         self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
         self.linear_objects_in_values = nn.Linear(input_size, embed_dim)
-
-        self.attn_obj = nn.Linear(hidden_size, hidden_size * discrimination_num_objects)
 
         self.hidden_size = hidden_size
         self.num_layers = num_layers
@@ -129,9 +144,12 @@ class Receiver(nn.Module):
 
         self.keys_output = nn.Linear(hidden_size, embed_dim)
         self.queries_output = nn.Linear(hidden_size, embed_dim)
-        self.attention_output = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
+        # self.attention_output = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
 
-        self.attention_input = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
+        # self.attention_input = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
+        self.attention_input = BahdanauAttention(embed_dim)
+        self.attention_output = BahdanauAttention(embed_dim)
+
         self.hidden_to_objects_mul = nn.Linear(hidden_size, embed_dim)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
@@ -147,20 +165,6 @@ class Receiver(nn.Module):
     def forward_first_turn(self, candidate_objects, sender_messages=None):
         batch_size = candidate_objects.shape[0]
 
-        # embedded_objects = self.linear_objects_in(candidate_objects)
-        # embedded_objects_avg = torch.mean(embedded_objects, dim=1)
-
-        # if self.object_attention:
-        #     attn_weights = F.softmax(
-        #         self.attn_obj(embedded_objects_avg).reshape(batch_size, -1, embedded_objects.shape[-1]), dim=1)
-        #     embedded_objects_transformed = torch.sum(attn_weights * embedded_objects, dim=1)
-        # else:
-        #     embedded_objects_transformed = embedded_objects_avg
-        #
-        # prev_hidden = [embedded_objects_transformed]
-        # prev_hidden.extend(
-        #     [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
-        # )
         if not self.object_attention:
             embedded_objects = self.linear_objects_in(candidate_objects)
             embedded_objects_avg = torch.mean(embedded_objects, dim=1)
@@ -195,10 +199,12 @@ class Receiver(nn.Module):
         if not self.object_attention:
             rnn_input = sender_messages_embedded
         else:
-            queries = sender_messages_embedded.unsqueeze(1)
+            # queries = sender_messages_embedded
             keys = self.linear_objects_in_keys(candidate_objects)
-            values = self.linear_objects_in_values(candidate_objects)
-            rnn_input, _ = self.attention_input(queries, keys, values, need_weights=False)
+            # values = self.linear_objects_in_values(candidate_objects)
+            # rnn_input, _ = self.attention_input(queries, keys, values, need_weights=False)
+            query = sender_messages_embedded.unsqueeze(1)
+            rnn_input, _ = self.attention_input(query, keys)
             rnn_input = rnn_input.squeeze()
 
         if self.feedback:
@@ -237,8 +243,11 @@ class Receiver(nn.Module):
         if self.output_attention:
             queries = self.queries_output(hidden_states).mean(dim=1, keepdims=True)
             keys = self.keys_output(hidden_states)
-            values = embedded_objects
-            hidden_states_transformed, _ = self.attention_output(queries, keys, values, need_weights=False)
+            # values = embedded_objects
+            # hidden_states_transformed, _ = self.attention_output(queries, keys, values, need_weights=False)
+
+            hidden_states_transformed, _ = self.attention_output(queries, keys)
+
             hidden_states_transformed = hidden_states_transformed.squeeze()
         else:
             last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
