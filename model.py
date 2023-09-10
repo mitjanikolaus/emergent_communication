@@ -88,7 +88,10 @@ class Receiver(nn.Module):
 
         self.sos_embedding_perc = nn.Parameter(torch.zeros(embed_dim))
 
-        self.linear_objects_in = nn.Linear(input_size, embed_dim)
+        self.linear_objects_in = nn.Linear(input_size, hidden_size)
+
+        self.linear_objects_out_layer = nn.Linear(input_size, embed_dim)
+
 
         self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
         self.linear_objects_in_values = nn.Linear(input_size, embed_dim)
@@ -158,7 +161,15 @@ class Receiver(nn.Module):
         # prev_hidden.extend(
         #     [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
         # )
-        prev_hidden = [torch.zeros((batch_size, self.hidden_size), device=candidate_objects.device)  for _ in range(self.num_layers)]
+        if not self.object_attention:
+            embedded_objects = self.linear_objects_in(candidate_objects)
+            embedded_objects_avg = torch.mean(embedded_objects, dim=1)
+            prev_hidden = [embedded_objects_avg]
+            prev_hidden.extend(
+                [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
+            )
+        else:
+            prev_hidden = [torch.zeros((batch_size, self.hidden_size), device=candidate_objects.device)  for _ in range(self.num_layers)]
 
         if sender_messages is None:
             messages_embedded = torch.stack([self.sos_embedding_perc] * batch_size)
@@ -181,13 +192,14 @@ class Receiver(nn.Module):
             return self.forward(messages_embedded, prev_hidden, candidate_objects)
 
     def forward(self, sender_messages_embedded, prev_hidden, candidate_objects, prev_msg_embedding=None):
-        # rnn_input = sender_messages_embedded
-
-        queries = sender_messages_embedded.unsqueeze(1)
-        keys = self.linear_objects_in_keys(candidate_objects)
-        values = self.linear_objects_in_values(candidate_objects)
-        rnn_input, _ = self.attention_input(queries, keys, values, need_weights=False)
-        rnn_input = rnn_input.squeeze()
+        if not self.object_attention:
+            rnn_input = sender_messages_embedded
+        else:
+            queries = sender_messages_embedded.unsqueeze(1)
+            keys = self.linear_objects_in_keys(candidate_objects)
+            values = self.linear_objects_in_values(candidate_objects)
+            rnn_input, _ = self.attention_input(queries, keys, values, need_weights=False)
+            rnn_input = rnn_input.squeeze()
 
         if self.feedback:
             rnn_input = torch.cat((rnn_input, prev_msg_embedding), dim=-1)
@@ -220,7 +232,7 @@ class Receiver(nn.Module):
     def output(self, candidate_objects, hidden_states, message_lengths):
         batch_size = hidden_states.shape[0]
 
-        embedded_objects = self.linear_objects_in(candidate_objects)
+        embedded_objects = self.linear_objects_out_layer(candidate_objects)
 
         if self.output_attention:
             queries = self.queries_output(hidden_states).mean(dim=1, keepdims=True)
