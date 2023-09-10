@@ -69,16 +69,14 @@ class LayerNormGRUCell(nn.Module):
         return h_t
 
 
-class BahdanauAttention(nn.Module):
+class Attention(nn.Module):
     def __init__(self, hidden_size):
-        super(BahdanauAttention, self).__init__()
+        super(Attention, self).__init__()
         self.Wa = nn.Linear(hidden_size, hidden_size)
-        self.Ua = nn.Linear(hidden_size, hidden_size)
-        self.Va = nn.Linear(hidden_size, 1)
 
     def forward(self, query, keys):
-        scores = self.Va(torch.tanh(self.Wa(query) + self.Ua(keys)))
-        scores = scores.squeeze(2).unsqueeze(1)
+        scores = torch.bmm(self.Wa(query), keys.permute(0, 2, 1))
+        scores = scores.squeeze().unsqueeze(1)
 
         weights = F.softmax(scores, dim=-1)
         context = torch.bmm(weights, keys)
@@ -147,8 +145,8 @@ class Receiver(nn.Module):
         # self.attention_output = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
 
         # self.attention_input = nn.MultiheadAttention(embed_dim, 1, batch_first=True)
-        self.attention_input = BahdanauAttention(embed_dim)
-        self.attention_output = BahdanauAttention(embed_dim)
+        self.attention_input = Attention(embed_dim)
+        self.attention_output = Attention(embed_dim)
 
         self.hidden_to_objects_mul = nn.Linear(hidden_size, embed_dim)
 
