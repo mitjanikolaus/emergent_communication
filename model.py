@@ -172,7 +172,7 @@ class Receiver(nn.Module):
         self.attention_input = Attention(attn_method, embed_dim)
         self.attention_output = Attention(attn_method, hidden_size)
 
-        self.hidden_to_objects_mul = nn.Linear(hidden_size, embed_dim)
+        self.hidden_to_objects_mul = nn.Linear(hidden_size, hidden_size)
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
 
