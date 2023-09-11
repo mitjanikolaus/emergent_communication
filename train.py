@@ -75,6 +75,7 @@ def get_args():
     parser = Trainer.add_argparse_args(parser)
     parser.set_defaults(max_epochs=-1,
                         log_every_steps=10000,
+                        check_val_every_n_epoch=20,
                         num_sanity_val_steps=3,
                         limit_val_batches=100,
                         max_time="00:46:00:00", # Default max time: 46 hours
