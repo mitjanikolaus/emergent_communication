@@ -1,6 +1,7 @@
 import argparse
 import pickle
 
+import torch.cuda
 from pytorch_lightning import seed_everything, Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
@@ -10,6 +11,8 @@ from model import SignalingGameModule
 
 def run(config):
     seed_everything(config.seed, workers=True)
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('medium')
 
     checkpoint_callback_1 = ModelCheckpoint(monitor="val_acc", mode="max", save_last=True,
                                           filename="{epoch:02d}-{val_acc:.2f}")
