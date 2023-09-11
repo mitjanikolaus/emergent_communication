@@ -132,7 +132,7 @@ class Receiver(nn.Module):
 
         self.linear_objects_in = nn.Linear(input_size, hidden_size)
 
-        self.linear_objects_out_layer = nn.Linear(input_size, embed_dim)
+        self.linear_objects_out_layer = nn.Linear(input_size, hidden_size)
 
 
         self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
@@ -167,10 +167,10 @@ class Receiver(nn.Module):
             ]
         )
 
-        self.keys_output = nn.Linear(hidden_size, embed_dim)
-        self.queries_output = nn.Linear(hidden_size, embed_dim)
+        self.keys_output = nn.Linear(hidden_size, hidden_size)
+        self.queries_output = nn.Linear(hidden_size, hidden_size)
         self.attention_input = Attention(attn_method, embed_dim)
-        self.attention_output = Attention(attn_method, embed_dim)
+        self.attention_output = Attention(attn_method, hidden_size)
 
         self.hidden_to_objects_mul = nn.Linear(hidden_size, embed_dim)
 
