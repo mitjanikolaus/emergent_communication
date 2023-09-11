@@ -13,7 +13,7 @@ from tqdm import tqdm
 def compute_entropy(messages):
     if not isinstance(messages, list) and len(messages.shape) > 1:
         _, occs = np.unique(messages, return_counts=True, axis=0)
-        occs = occs.astype(np.float)
+        occs = occs.astype(float)
         freqs = occs / len(messages)
     else:
         occs = Counter(messages).values()
