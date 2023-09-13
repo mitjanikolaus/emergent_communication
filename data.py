@@ -75,11 +75,11 @@ class SignalingGameDataModule(pl.LightningDataModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers,
-                          shuffle=False, collate_fn=self.collate_fn)
+                          shuffle=True, collate_fn=self.collate_fn)
 
     def val_dataloader(self):
         validation_dataloader = DataLoader(self.val_dataset, batch_size=self.batch_size,
-                                               num_workers=self.num_workers, collate_fn=self.collate_fn)
+                                               num_workers=self.num_workers, collate_fn=self.collate_fn, shuffle=True)
         language_analysis_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size,
                                                   num_workers=self.num_workers, collate_fn=self.collate_fn)
         if self.use_test_set:

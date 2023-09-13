@@ -3,6 +3,7 @@ import math
 import random
 from collections import defaultdict
 import torch
+from pytorch_lightning import seed_everything
 from pytorch_lightning.utilities import AttributeDict
 from torch import nn
 import torch.nn.functional as F
@@ -771,6 +772,8 @@ class SignalingGameModule(pl.LightningModule):
                 mask_dict[name] = temp_mask.bool().view(weight_mag.shape)
 
     def on_train_epoch_start(self):
+        seed_everything(self.current_epoch, workers=True)
+
         if self.current_epoch == 0 and self.hparams.reset_parameters:
             self.update_reset_masks()
 
