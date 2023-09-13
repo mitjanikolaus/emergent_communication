@@ -171,7 +171,7 @@ class SignalingGameGuessWhatDataset(Dataset):
         # Discard first image (scene overview)
         candidate_objects = candidate_objects[1:]
 
-        random.shuffle(candidate_objects)
+        candidate_objects = candidate_objects[torch.randperm(len(candidate_objects))]
         candidate_objects = candidate_objects[:self.num_objects]
 
         target_position = random.choice(range(len(candidate_objects)))
