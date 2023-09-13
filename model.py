@@ -754,8 +754,7 @@ class SignalingGameModule(pl.LightningModule):
                                         messages.numel(), replacement=True)
             indices = indices.reshape(messages.shape).to(messages.device)
             # Replace all randomly selected values (but only if they are not EOS symbols (0))
-            messages_noisy = messages[(indices == 1) & (messages != 0)]
-            messages[(indices == 1) & (messages != 0)] = torch.randint(0, self.params["vocab_size"], (len(messages_noisy),))
+            messages[(indices == 1) & (messages != 0)] = self.token_noise
         return messages
 
     def update_reset_masks(self):
