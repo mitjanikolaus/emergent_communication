@@ -753,8 +753,8 @@ class SignalingGameModule(pl.LightningModule):
             indices = torch.multinomial(torch.tensor([1 - self.params.noise, self.params.noise]),
                                         messages.numel(), replacement=True)
             indices = indices.reshape(messages.shape).to(messages.device)
-            # Replace all randomly selected values (but only if they are not EOS symbols (0))
-            messages[(indices == 1) & (messages != 0)] = self.token_noise
+            # Replace all randomly selected values
+            messages[(indices == 1)] = self.token_noise
         return messages
 
     def update_reset_masks(self):
