@@ -110,6 +110,46 @@ class Attention(nn.Module):
         return context, weights
 
 
+class AttentionFeatureWise(nn.Module):
+    def __init__(self, method, hidden_size):
+        super(AttentionFeatureWise, self).__init__()
+        self.method = method
+        if self.method not in ['dot', 'general', 'concat']:
+            raise ValueError(self.method, "is not an appropriate attention method.")
+        self.hidden_size = hidden_size
+        if self.method == 'general':
+            self.attn = nn.Linear(self.hidden_size, hidden_size)
+        elif self.method == 'concat':
+            self.attn = nn.Linear(self.hidden_size * 2, hidden_size)
+            self.v = nn.Parameter(torch.FloatTensor(hidden_size))
+
+    def dot_score(self, hidden, encoder_output):
+        return torch.sum(hidden * encoder_output, dim=1)
+
+    def general_score(self, hidden, encoder_output):
+        energy = self.attn(encoder_output)
+        return torch.sum(hidden * energy, dim=1)
+
+    def concat_score(self, hidden, encoder_output):
+        energy = self.attn(torch.cat((hidden.expand(encoder_output.size(0), -1, -1), encoder_output), 2)).tanh()
+        return torch.sum(self.v * energy, dim=1)
+
+    def forward(self, query, keys):
+        # Calculate the attention weights (energies) based on the given method
+        if self.method == 'general':
+            attn_energies = self.general_score(query, keys)
+        elif self.method == 'concat':
+            attn_energies = self.concat_score(query, keys)
+        else:
+            attn_energies = self.dot_score(query, keys)
+
+        # Return the softmax normalized probability scores (with added dimension)
+        weights = F.softmax(attn_energies, dim=1).unsqueeze(2)
+
+        context = torch.bmm(keys, weights)
+
+        return context, weights
+
 
 class Receiver(nn.Module):
     def __init__(
@@ -133,7 +173,6 @@ class Receiver(nn.Module):
         self.linear_objects_in = nn.Linear(input_size, hidden_size)
 
         self.linear_objects_out_layer = nn.Linear(input_size, hidden_size)
-
 
         self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
         self.linear_objects_in_values = nn.Linear(input_size, embed_dim)
@@ -294,6 +333,8 @@ class Sender(pl.LightningModule):
         num_layers,
         feedback,
         vocab_size_feedback,
+        attention,
+        attn_method,
     ):
         super(Sender, self).__init__()
 
@@ -312,6 +353,12 @@ class Sender(pl.LightningModule):
 
         self.embedding_response = nn.Embedding(vocab_size_feedback, embed_dim)
 
+        if attention:
+            self.attention = AttentionFeatureWise(attn_method, embed_dim)
+            self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
+        else:
+            self.attention = None
+
         self.hidden_size = hidden_size
         self.embed_dim = embed_dim
         self.vocab_size = vocab_size
@@ -325,6 +372,8 @@ class Sender(pl.LightningModule):
         rnn_input_size = embed_dim
         if self.feedback:
             rnn_input_size += embed_dim
+        if self.attention:
+            rnn_input_size += 1
 
         self.cells = nn.ModuleList(
             [
@@ -346,7 +395,8 @@ class Sender(pl.LightningModule):
     def forward_first_turn(self, input_objects, receiver_message=None):
         batch_size = input_objects.shape[0]
 
-        prev_hidden = [self.linear_in_objects(input_objects)]
+        embedded_objects = self.linear_in_objects(input_objects)
+        prev_hidden = [embedded_objects]
         prev_hidden.extend(
             [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
         )
@@ -358,29 +408,36 @@ class Sender(pl.LightningModule):
                 embedded_receiver_message = torch.stack([self.sos_embedding_perc] * batch_size)
             else:
                 embedded_receiver_message = self.embedding_response(receiver_message)
-
-            return self.forward(prev_msg_embedding, prev_hidden, embedded_receiver_message)
         else:
-            return self.forward(prev_msg_embedding, prev_hidden)
+            embedded_receiver_message = None
+        return self.forward(input_objects, prev_msg_embedding, prev_hidden, embedded_receiver_message)
 
-    def forward_subsequent_turn(self, output_last_turn, prev_hidden, receiver_message):
+    def forward_subsequent_turn(self, input_objects, output_last_turn, prev_hidden, receiver_message):
         embedded_output_last_turn = self.embedding_prod(output_last_turn)
 
         if self.feedback:
             embedded_receiver_message = self.embedding_response(receiver_message)
-            return self.forward(embedded_output_last_turn, prev_hidden, embedded_receiver_message)
         else:
-            return self.forward(embedded_output_last_turn, prev_hidden)
+            embedded_receiver_message = None
 
-    def forward(self, prev_msg_embedding, prev_hidden, embedded_receiver_message=None):
-        input = prev_msg_embedding
+        return self.forward(input_objects, embedded_output_last_turn, prev_hidden, embedded_receiver_message)
+
+    def forward(self, input_objects, prev_msg_embedding, prev_hidden, embedded_receiver_message=None):
+        input_rnn = prev_msg_embedding
         if self.feedback:
-            input = torch.cat((prev_msg_embedding, embedded_receiver_message), dim=1)
+            input_rnn = torch.cat((prev_msg_embedding, embedded_receiver_message), dim=1)
+
+        if self.attention:
+            keys = self.linear_objects_in_keys(input_objects).unsqueeze(1)
+            query = input_rnn.unsqueeze(1) if not self.feedback else embedded_receiver_message.unsqueeze(1)
+            attn_output, _ = self.attention(query, keys)
+            attn_output = attn_output.squeeze().unsqueeze(1)
+            input_rnn = torch.cat((input_rnn, attn_output), dim=1)
 
         for i, layer in enumerate(self.cells):
-            h_t = layer(input, prev_hidden[i])
+            h_t = layer(input_rnn, prev_hidden[i])
             prev_hidden[i] = h_t
-            input = h_t
+            input_rnn = h_t
 
         step_probs = F.softmax(self.hidden_to_output(h_t), dim=1)
         distr = Categorical(probs=step_probs)
@@ -487,6 +544,8 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--sender-learning-speed", type=float, default=1)
         parser.add_argument("--sender-entropy-coeff", type=float, default=0.1)
         parser.add_argument("--sender-layer-norm", default=False, action="store_true")
+        parser.add_argument("--sender-attention", default=False, action="store_true")
+        parser.add_argument("--sender-attn-method", default="general", type=str)
 
         parser.add_argument("--receiver-embed-dim", type=int, default=16)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
@@ -520,7 +579,8 @@ class SignalingGameModule(pl.LightningModule):
                                self.params.vocab_size, self.params.sender_embed_dim,
                                self.params.sender_hidden_dim, self.params.max_len,
                                self.params.sender_layer_norm, self.params.sender_num_layers,
-                               self.params.feedback, self.params.vocab_size_feedback)
+                               self.params.feedback, self.params.vocab_size_feedback,
+                               self.params.sender_attention, self.params.sender_attn_method)
                         for _ in range(self.params.num_senders)
                     ]
                 )
@@ -645,7 +705,7 @@ class SignalingGameModule(pl.LightningModule):
 
         for step in range(1, self.params.max_len):
             sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_subsequent_turn(
-                sender_output_tokens, sender_prev_hidden, input_feedback)
+                sender_input, sender_output_tokens, sender_prev_hidden, input_feedback)
             sender_output_tokens_detached = sender_output_tokens.detach().clone()
             sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
             messages_sender.append(sender_output_tokens_detached)
