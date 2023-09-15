@@ -460,7 +460,7 @@ class SignalingGameModule(pl.LightningModule):
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
                  sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
-                 vocab_size=5, noise=0, feedback=False, vocab_size_feedback=3,
+                 vocab_size=5, noise=0, noise_permutation=False, feedback=False, vocab_size_feedback=3,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False,
                  guesswhat=False, imagenet=False, **kwargs):
@@ -500,6 +500,8 @@ class SignalingGameModule(pl.LightningModule):
             raise ValueError("Receiver learning speed should be between 0 and 1 ", self.params.receiver_learning_speed)
 
         self.token_noise = self.params["vocab_size"]
+        self.noise_permutation = self.params["noise_permutation"]
+
         self.automatic_optimization = False
 
         self.best_val_acc_no_noise = 0.0
@@ -531,6 +533,8 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
 
         parser.add_argument("--noise", type=float, default=0)
+        parser.add_argument("--noise-permutation", default=False, action="store_true")
+
         parser.add_argument("--feedback", default=False, action="store_true")
 
         parser.add_argument("--log-topsim-on-validation", default=False, action="store_true")
@@ -814,7 +818,11 @@ class SignalingGameModule(pl.LightningModule):
                                         messages.numel(), replacement=True)
             indices = indices.reshape(messages.shape).to(messages.device)
             # Replace all randomly selected values
-            messages[(indices == 1)] = self.token_noise
+            if self.noise_permutation:
+                messages_noisy = messages[(indices == 1)]
+                messages[(indices == 1)] = torch.randint(0, self.params["vocab_size"], (len(messages_noisy),), device=messages.device)
+            else:
+                messages[(indices == 1)] = self.token_noise
         return messages
 
     def update_reset_masks(self):
