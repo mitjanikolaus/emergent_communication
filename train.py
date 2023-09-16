@@ -18,7 +18,7 @@ def run(config):
                                           filename="{epoch:02d}-{val_acc:.2f}")
     checkpoint_callback_2 = ModelCheckpoint(monitor="val_acc_no_noise", mode="max", save_last=True,
                                           filename="{epoch:02d}-{val_acc_no_noise:.2f}")
-    early_stop_callback = EarlyStopping(monitor="val_acc_no_noise", patience=config.patience, verbose=True, mode="max",
+    early_stop_callback = EarlyStopping(monitor="val_acc", patience=config.patience, verbose=True, mode="max",
                                         min_delta=0.01, stopping_threshold=config.stopping_threshold)
 
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
