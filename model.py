@@ -560,6 +560,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--receiver-output-attention", default=False, action="store_true")
         parser.add_argument("--receiver-object-attention", default=False, action="store_true")
         parser.add_argument("--receiver-attn-method", default="dot", type=str)
+        parser.add_argument("--receiver-aux-loss", default=False, action="store_true")
 
         parser.add_argument("--reset-parameters", default=False, action="store_true")
         parser.add_argument("--update-masks", default=False, action="store_true")
@@ -687,6 +688,8 @@ class SignalingGameModule(pl.LightningModule):
         messages_receiver = []
         receiver_logits = []
 
+        receiver_all_logits = []
+
         sender_output_tokens, sender_step_entropy, sender_step_logits, sender_prev_hidden = sender.forward_first_turn(sender_input)
         sender_output_tokens_detached = sender_output_tokens.detach().clone()
         sender_output_tokens_detached = self.add_noise(sender_output_tokens_detached, disable_noise)
@@ -695,14 +698,15 @@ class SignalingGameModule(pl.LightningModule):
         sender_entropies.append(sender_step_entropy)
         sender_logits.append(sender_step_logits)
 
-        receiver_output_tokens, receiver_step_entropy, receiver_step_logits, receiver_first_turn_logits, receiver_prev_hidden = receiver.forward_first_turn(receiver_input,
+        receiver_output_tokens, receiver_step_entropy, receiver_output_token_logits, receiver_out_logits, receiver_prev_hidden = receiver.forward_first_turn(receiver_input,
             sender_output_tokens_detached)
+        receiver_all_logits.append(receiver_out_logits)
 
         input_feedback = None
         if self.params.feedback:
             input_feedback = receiver_output_tokens.detach()
             receiver_entropies.append(receiver_step_entropy)
-            receiver_logits.append(receiver_step_logits)
+            receiver_logits.append(receiver_output_token_logits)
             messages_receiver.append(receiver_output_tokens)
 
         receiver_hidden_states.append(receiver_prev_hidden[-1])
@@ -717,20 +721,23 @@ class SignalingGameModule(pl.LightningModule):
             sender_entropies.append(sender_step_entropy)
             sender_logits.append(sender_step_logits)
 
-            receiver_output_tokens, receiver_step_entropy, receiver_step_logits, _, receiver_prev_hidden = receiver.forward_subsequent_turn(
+            receiver_output_tokens, receiver_step_entropy, receiver_output_token_logits, receiver_out_logits, receiver_prev_hidden = receiver.forward_subsequent_turn(
                 sender_output_tokens_detached, receiver_prev_hidden, receiver_input, receiver_output_tokens)
             receiver_hidden_states.append(receiver_prev_hidden[-1])
+            receiver_all_logits.append(receiver_out_logits)
 
             if self.params.feedback:
                 input_feedback = receiver_output_tokens.detach()
                 receiver_entropies.append(receiver_step_entropy)
-                receiver_logits.append(receiver_step_logits)
+                receiver_logits.append(receiver_output_token_logits)
                 messages_receiver.append(receiver_output_tokens)
 
         messages_sender = torch.stack(messages_sender).permute(1, 0)
         sender_logits = torch.stack(sender_logits).permute(1, 0)
         sender_entropies = torch.stack(sender_entropies).permute(1, 0)
         receiver_hidden_states = torch.stack(receiver_hidden_states).permute(1, 0, 2)
+        receiver_all_logits = torch.stack(receiver_all_logits).permute(1, 0, 2)
+        receiver_all_logits = receiver_all_logits.reshape(-1, receiver_all_logits.shape[-1])
 
         messages_sender_lengths = find_lengths(messages_sender)
 
@@ -778,14 +785,16 @@ class SignalingGameModule(pl.LightningModule):
 
             receiver_loss -= receiver_entropy_loss
 
-            # receiver_aux_loss = F.cross_entropy(receiver_first_turn_logits, informative_attrs)
-            #
-            # self.log(f"receiver_aux_loss", receiver_aux_loss)
-            #
-            # receiver_aux_acc = (receiver_first_turn_logits.argmax(dim=1) == informative_attrs).detach().float()
-            # self.log(f"receiver_aux_acc", receiver_aux_acc.mean())
-            #
-            # receiver_loss += 10 * receiver_aux_loss
+            if self.params.receiver_aux_loss:
+                noise_locations = (messages_sender == self.token_noise).to(torch.long).reshape(-1)
+                receiver_aux_loss = F.cross_entropy(receiver_all_logits, noise_locations)
+
+                self.log(f"receiver_aux_loss", receiver_aux_loss)
+
+                receiver_aux_acc = (receiver_all_logits.argmax(dim=-1) == noise_locations).detach().float()
+                self.log(f"receiver_aux_acc", receiver_aux_acc.mean(), prog_bar=True)
+
+                receiver_loss += receiver_aux_loss
 
         self.log(f"receiver_loss", receiver_loss)
 
