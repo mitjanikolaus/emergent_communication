@@ -194,6 +194,8 @@ class Receiver(nn.Module):
         rnn_input_size = embed_dim
         if self.feedback:
             rnn_input_size += embed_dim
+        if self.object_attention:
+            rnn_input_size += embed_dim
 
         self.sos_embedding = nn.Parameter(torch.zeros(embed_dim))
 
@@ -226,15 +228,12 @@ class Receiver(nn.Module):
     def forward_first_turn(self, candidate_objects, sender_messages=None):
         batch_size = candidate_objects.shape[0]
 
-        if not self.object_attention:
-            embedded_objects = self.linear_objects_in(candidate_objects)
-            embedded_objects_avg = torch.mean(embedded_objects, dim=1)
-            prev_hidden = [embedded_objects_avg]
-            prev_hidden.extend(
-                [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
-            )
-        else:
-            prev_hidden = [torch.zeros((batch_size, self.hidden_size), device=candidate_objects.device)  for _ in range(self.num_layers)]
+        embedded_objects = self.linear_objects_in(candidate_objects)
+        embedded_objects_avg = torch.mean(embedded_objects, dim=1)
+        prev_hidden = [embedded_objects_avg]
+        prev_hidden.extend(
+            [torch.zeros_like(prev_hidden[0]) for _ in range(self.num_layers - 1)]
+        )
 
         if sender_messages is None:
             messages_embedded = torch.stack([self.sos_embedding_perc] * batch_size)
@@ -257,16 +256,14 @@ class Receiver(nn.Module):
             return self.forward(messages_embedded, prev_hidden, candidate_objects)
 
     def forward(self, sender_messages_embedded, prev_hidden, candidate_objects, prev_msg_embedding=None):
-        if not self.object_attention:
-            rnn_input = sender_messages_embedded
-        else:
-            # queries = sender_messages_embedded
+        if self.object_attention:
             keys = self.linear_objects_in_keys(candidate_objects)
-            # values = self.linear_objects_in_values(candidate_objects)
-            # rnn_input, _ = self.attention_input(queries, keys, values, need_weights=False)
             query = sender_messages_embedded.unsqueeze(1)
-            rnn_input, _ = self.attention_input(query, keys)
-            rnn_input = rnn_input.squeeze()
+            attn_out, _ = self.attention_input(query, keys)
+            attn_out = attn_out.squeeze()
+            rnn_input = torch.cat((attn_out, sender_messages_embedded), dim=-1)
+        else:
+            rnn_input = sender_messages_embedded
 
         if self.feedback:
             rnn_input = torch.cat((rnn_input, prev_msg_embedding), dim=-1)
