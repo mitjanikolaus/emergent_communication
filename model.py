@@ -12,7 +12,7 @@ from torch.nn import ModuleList, GRUCell
 
 from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
 from utils import RESNET_IMG_FEATS_DIM
-from utils import MeanBaseline, find_lengths, NoBaseline
+from utils import MeanBaseline, NoBaseline
 
 
 MAX_SAMPLES_LANGUAGE_ANALYSIS = 1000
@@ -296,22 +296,18 @@ class Receiver(nn.Module):
 
         return output_token, entropy, output_token_logits, logits, prev_hidden
 
-    def output(self, candidate_objects, hidden_states, message_lengths):
-        batch_size = hidden_states.shape[0]
-
+    def output(self, candidate_objects, hidden_states):
         embedded_objects = self.linear_objects_out_layer(candidate_objects)
 
         if self.output_attention:
             queries = self.queries_output(hidden_states).mean(dim=1, keepdims=True)
             keys = self.keys_output(hidden_states)
-            # values = embedded_objects
-            # hidden_states_transformed, _ = self.attention_output(queries, keys, values, need_weights=False)
 
             hidden_states_transformed, _ = self.attention_output(queries, keys)
 
             hidden_states_transformed = hidden_states_transformed.squeeze()
         else:
-            last_hidden_states = hidden_states[range(batch_size), message_lengths-1]
+            last_hidden_states = hidden_states[:, -1]
             hidden_states_transformed = self.hidden_to_objects_mul(last_hidden_states)
 
         output = torch.matmul(embedded_objects, hidden_states_transformed.unsqueeze(2))
@@ -455,7 +451,7 @@ class Sender(pl.LightningModule):
 
 class SignalingGameModule(pl.LightningModule):
     def __init__(self, symmetric=False, optimal_sender=False, load_checkpoint=None, baseline_type="mean",
-                 max_len=4, length_cost=0, num_attributes=4, num_values=4, num_senders=1, num_receivers=1,
+                 max_len=4, num_attributes=4, num_values=4, num_senders=1, num_receivers=1,
                  receiver_embed_dim=30, receiver_num_layers=500, receiver_hidden_dim=500,
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
@@ -483,8 +479,6 @@ class SignalingGameModule(pl.LightningModule):
 
         self.sender_entropy_coeff = self.params.sender_entropy_coeff
         self.receiver_entropy_coeff = self.params.receiver_entropy_coeff
-
-        self.length_cost = self.params.length_cost
 
         if self.params.baseline_type == "mean":
             self.baselines = defaultdict(MeanBaseline)
@@ -527,10 +521,9 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--num-values", type=int, default=100)
         parser.add_argument("--num-senders", type=int, default=1)
         parser.add_argument("--num-receivers", type=int, default=1)
-        parser.add_argument("--vocab-size", type=int, default=101)    # Including the EOS token!
+        parser.add_argument("--vocab-size", type=int, default=100)
         parser.add_argument("--vocab-size-feedback", type=int, default=100)
-        parser.add_argument("--max-len", type=int, default=4)   # Excluding EOS token!
-        parser.add_argument("--length-cost", type=float, default=0)   # Excluding EOS token!
+        parser.add_argument("--max-len", type=int, default=4)
 
         parser.add_argument("--noise", type=float, default=0)
         parser.add_argument("--noise-permutation", default=False, action="store_true")
@@ -740,34 +733,16 @@ class SignalingGameModule(pl.LightningModule):
             receiver_all_logits = torch.stack(receiver_all_logits).permute(1, 0, 2)
             receiver_all_logits = receiver_all_logits.reshape(-1, receiver_all_logits.shape[-1])
 
-        messages_sender_lengths = find_lengths(messages_sender)
-
         if self.params.feedback:
-            messages_receiver = torch.stack(messages_receiver).permute(1, 0)
             receiver_logits = torch.stack(receiver_logits).permute(1, 0)
             receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
 
-            messages_receiver_lengths = find_lengths(messages_receiver, stop_at_eos=False)
-            self.log(f"message_lengths_receiver", messages_receiver_lengths.float().mean())
-            self.log(f"message_lengths_sender", messages_sender_lengths.float().mean())
-
-            self.log(f"message_lengths", messages_sender_lengths.float().mean() + messages_receiver_lengths.float().mean())
-        else:
-            self.log(f"message_lengths", messages_sender_lengths.float().mean())
-
-        for i in range(messages_sender.size(1)):
-            sender_entropies[i >= messages_sender_lengths, i] = 0
-            sender_logits[i >= messages_sender_lengths, i] = 0
-
-        effective_entropy_s_1 = sender_entropies.sum(dim=1) / messages_sender_lengths.float()
+        effective_entropy_s_1 = sender_entropies.sum(dim=1) / self.params.max_len
         effective_log_prob_s = sender_logits.sum(dim=1)
 
         sender_entropy_loss = (effective_entropy_s_1 * self.sender_entropy_coeff).mean()
 
-        policy_length_loss = (messages_sender_lengths.float() * self.length_cost * effective_log_prob_s).mean()
-
-        last_time_steps = messages_sender_lengths.cpu().numpy().copy()
-        receiver_output = receiver.output(receiver_input, receiver_hidden_states, last_time_steps)
+        receiver_output = receiver.output(receiver_input, receiver_hidden_states)
         rewards = (receiver_output.argmax(dim=1) == labels).detach().float()
 
         receiver_output_loss = F.cross_entropy(receiver_output, labels)
@@ -775,7 +750,7 @@ class SignalingGameModule(pl.LightningModule):
         receiver_loss = receiver_output_loss
 
         if self.params.feedback and len(receiver_all_logits) > 0:
-            effective_entropy_r = receiver_entropies.sum(dim=1) / messages_receiver_lengths.float()
+            effective_entropy_r = receiver_entropies.sum(dim=1) / self.params.max_len
             receiver_entropy_loss = (effective_entropy_r * self.receiver_entropy_coeff).mean()
 
             receiver_logits = receiver_logits.sum(dim=1)
@@ -808,9 +783,8 @@ class SignalingGameModule(pl.LightningModule):
         sender_policy_loss = (loss * effective_log_prob_s).mean()
 
         self.log(f"sender_policy_loss", sender_policy_loss)
-        self.log(f"sender_policy_length_loss", policy_length_loss)
 
-        sender_loss = sender_policy_loss + policy_length_loss - sender_entropy_loss
+        sender_loss = sender_policy_loss - sender_entropy_loss
 
         loss = sender_loss + receiver_loss
 
