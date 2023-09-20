@@ -765,7 +765,7 @@ class SignalingGameModule(pl.LightningModule):
                 self.log(f"receiver_aux_loss", receiver_aux_loss)
 
                 receiver_aux_acc = (receiver_all_logits.argmax(dim=-1) == noise_locations).detach().float()
-                self.log(f"receiver_aux_acc", receiver_aux_acc.mean(), add_dataloader_idx=False)
+                self.log(f"receiver_aux_acc", receiver_aux_acc.mean())
 
                 receiver_loss += receiver_aux_loss
 
