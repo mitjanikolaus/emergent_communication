@@ -50,7 +50,6 @@ def show_image(
 
 
 def get_spatial_feat(bbox, im_width, im_height):
-    # TODO: use?
     # Rescaling
     x_left = (1.*bbox.x_left / im_width) * 2 - 1
     x_right = (1.*bbox.x_right / im_width) * 2 - 1
@@ -72,7 +71,7 @@ def get_spatial_feat(bbox, im_width, im_height):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--min-area-in-pixels", type=int, default="500")
-    parser.add_argument("--model", type=str, default="resnet")
+    parser.add_argument("--model", type=str, default="vit")
 
     args = parser.parse_args()
 
