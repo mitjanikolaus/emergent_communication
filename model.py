@@ -765,7 +765,7 @@ class SignalingGameModule(pl.LightningModule):
                 self.log(f"receiver_aux_loss", receiver_aux_loss)
 
                 receiver_aux_acc = (receiver_all_logits.argmax(dim=-1) == noise_locations).detach().float()
-                self.log(f"receiver_aux_acc", receiver_aux_acc.mean(), prog_bar=True)
+                self.log(f"receiver_aux_acc", receiver_aux_acc.mean(), prog_bar=True, add_dataloader_idx=False)
 
                 receiver_loss += receiver_aux_loss
 
@@ -901,7 +901,7 @@ class SignalingGameModule(pl.LightningModule):
         # Language analysis (on train set data)
         language_analysis_results = validation_step_outputs[1]
         train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
-        self.log("train_acc_no_noise", train_acc_no_noise.float().mean(), prog_bar=True, add_dataloader_idx=False)
+        self.log("train_acc_no_noise", train_acc_no_noise.float().mean(), add_dataloader_idx=False)
         if is_best_checkpoint:
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise.float().mean())
 
