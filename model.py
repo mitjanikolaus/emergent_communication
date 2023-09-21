@@ -90,7 +90,7 @@ class Attention(nn.Module):
         return torch.sum(hidden * energy, dim=2)
 
     def concat_score(self, hidden, encoder_output):
-        energy = self.attn(torch.cat((hidden.expand(encoder_output.size(0), -1, -1), encoder_output), 2)).tanh()
+        energy = self.attn(torch.cat((hidden.expand(encoder_output.size(0), encoder_output.size(1), -1), encoder_output), 2)).tanh()
         return torch.sum(self.v * energy, dim=2)
 
     def forward(self, query, keys):
@@ -110,52 +110,10 @@ class Attention(nn.Module):
         return context, weights
 
 
-class AttentionFeatureWise(nn.Module):
-    def __init__(self, method, hidden_size):
-        super(AttentionFeatureWise, self).__init__()
-        self.method = method
-        if self.method not in ['dot', 'general', 'concat']:
-            raise ValueError(self.method, "is not an appropriate attention method.")
-        self.hidden_size = hidden_size
-        if self.method == 'general':
-            self.attn = nn.Linear(self.hidden_size, hidden_size)
-        elif self.method == 'concat':
-            self.attn = nn.Linear(self.hidden_size * 2, hidden_size)
-            self.v = nn.Parameter(torch.FloatTensor(hidden_size))
-
-    def dot_score(self, hidden, encoder_output):
-        return torch.sum(hidden * encoder_output, dim=1)
-
-    def general_score(self, hidden, encoder_output):
-        energy = self.attn(encoder_output)
-        return torch.sum(hidden * energy, dim=1)
-
-    def concat_score(self, hidden, encoder_output):
-        energy = self.attn(torch.cat((hidden.expand(encoder_output.size(0), -1, -1), encoder_output), 2)).tanh()
-        return torch.sum(self.v * energy, dim=1)
-
-    def forward(self, query, keys):
-        # Calculate the attention weights (energies) based on the given method
-        if self.method == 'general':
-            attn_energies = self.general_score(query, keys)
-        elif self.method == 'concat':
-            attn_energies = self.concat_score(query, keys)
-        else:
-            attn_energies = self.dot_score(query, keys)
-
-        # Return the softmax normalized probability scores (with added dimension)
-        weights = F.softmax(attn_energies, dim=1).unsqueeze(2)
-
-        context = torch.bmm(keys, weights)
-
-        return context, weights
-
-
 class Receiver(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
-            feedback, vocab_size_feedback, object_attention, output_attention, discrimination_num_objects,
-            attn_method, noise=False
+            feedback, vocab_size_feedback, object_attention, output_attention, attn_method, noise=False
     ):
         super(Receiver, self).__init__()
 
@@ -347,8 +305,9 @@ class Sender(pl.LightningModule):
         self.embedding_response = nn.Embedding(vocab_size_feedback, embed_dim)
 
         if attention:
-            self.attention = AttentionFeatureWise(attn_method, embed_dim)
+            self.attention = Attention(attn_method, embed_dim)
             self.linear_objects_in_keys = nn.Linear(input_size, embed_dim)
+            self.linear_query_reduce = nn.Linear(embed_dim*2, embed_dim)
         else:
             self.attention = None
 
@@ -421,8 +380,12 @@ class Sender(pl.LightningModule):
             input_rnn = torch.cat((prev_msg_embedding, embedded_receiver_message), dim=1)
 
         if self.attention:
-            keys = self.linear_objects_in_keys(input_objects).unsqueeze(1)
-            query = input_rnn.unsqueeze(1) if not self.feedback else embedded_receiver_message.unsqueeze(1)
+            keys = self.linear_objects_in_keys(input_objects).unsqueeze(2)
+            if self.feedback:
+                query = self.linear_query_reduce(input_rnn).unsqueeze(1)
+            else:
+                query = prev_msg_embedding.unsqueeze(1)
+
             attn_output, _ = self.attention(query, keys)
             attn_output = attn_output.squeeze().unsqueeze(1)
             input_rnn = torch.cat((input_rnn, attn_output), dim=1)
@@ -539,7 +502,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--sender-entropy-coeff", type=float, default=0.1)
         parser.add_argument("--sender-layer-norm", default=False, action="store_true")
         parser.add_argument("--sender-attention", default=False, action="store_true")
-        parser.add_argument("--sender-attn-method", default="general", type=str)
+        parser.add_argument("--sender-attn-method", default="dot", type=str)
 
         parser.add_argument("--receiver-embed-dim", type=int, default=16)
         parser.add_argument("--receiver-num-layers", type=int, default=1)
@@ -591,7 +554,7 @@ class SignalingGameModule(pl.LightningModule):
                              self.params.receiver_layer_norm, self.params.receiver_num_layers,
                              self.params.feedback, self.params.vocab_size_feedback,
                              self.params.receiver_object_attention,
-                             self.params.receiver_output_attention, self.params.discrimination_num_objects,
+                             self.params.receiver_output_attention,
                              self.params.receiver_attn_method, noise)
                     for _ in range(self.params.num_receivers)
                 ]
