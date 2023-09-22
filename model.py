@@ -512,7 +512,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--receiver-layer-norm", default=False, action="store_true")
         parser.add_argument("--receiver-output-attention", default=False, action="store_true")
         parser.add_argument("--receiver-object-attention", default=False, action="store_true")
-        parser.add_argument("--receiver-attn-method", default="dot", type=str)
+        parser.add_argument("--receiver-attn-method", default="general", type=str)
         parser.add_argument("--receiver-aux-loss", default=False, action="store_true")
 
         parser.add_argument("--reset-parameters", default=False, action="store_true")
