@@ -884,7 +884,7 @@ class SignalingGameModule(pl.LightningModule):
             self.log("test_acc_no_noise", test_acc_no_noise, add_dataloader_idx=False)
 
         path = os.path.join(self.logger.log_dir, "results.pickle")
-        metrics = {n: v.cpu() for n, v in self.trainer.logged_metrics.items()}
+        metrics = {n: v.cpu().item() for n, v in self.trainer.logged_metrics.items()}
         pickle.dump(metrics, open(path, "wb"))
 
     def analyze_language(self, messages, meanings, is_best_checkpoint=False):
