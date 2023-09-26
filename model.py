@@ -744,7 +744,7 @@ class SignalingGameModule(pl.LightningModule):
                 noise_locations = (messages_sender == self.token_noise).to(torch.long).reshape(-1)
                 receiver_aux_loss = F.cross_entropy(receiver_all_logits, noise_locations)
 
-                self.log(f"receiver_aux_loss", receiver_aux_loss)
+                self.log(f"receiver_auxiliary_loss", receiver_aux_loss)
 
                 receiver_aux_acc = (receiver_all_logits.argmax(dim=-1) == noise_locations).detach().float()
                 self.log(f"receiver_aux_acc", receiver_aux_acc.mean())
