@@ -8,7 +8,6 @@ import torch
 from fiftyone.zoo import load_zoo_dataset
 from PIL import Image as PIL_Image
 import matplotlib.pyplot as plt
-from h5py import string_dtype
 from matplotlib.patches import Rectangle
 from torch import nn
 
@@ -16,7 +15,7 @@ from torchvision.models import resnet50, ResNet50_Weights, ViT_B_16_Weights
 from torchvision.models.vision_transformer import vit_b_16
 from tqdm import tqdm
 
-from utils import RESNET_IMG_FEATS_DIM, ViT_IMG_FEATS_DIM, H5_IDS_KEY, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR_GUESSWHAT
+from utils import RESNET_IMG_FEATS_DIM, ViT_IMG_FEATS_DIM, GUESSWHAT_MAX_NUM_OBJECTS, DATA_DIR_GUESSWHAT
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -99,18 +98,35 @@ if __name__ == '__main__':
             model = model.to(device)
 
             ids = []
+            print("\nExtracting features: ")
             for sample in tqdm(ds):
-                img = PIL_Image.open(sample.filepath)
                 if not sample.ground_truth:
                     continue
 
+                width = sample.metadata.width
+                height = sample.metadata.height
+
+                bbs = []
+                for detection in sample.ground_truth.detections:
+                    bb = detection.bounding_box
+
+                    area_ppx = (bb[2] * width) * (bb[3] * height)
+                    if area_ppx > args.min_area_in_pixels:
+                        bbs.append(bb)
+
+                if len(bbs) < 2:
+                    # Do not consider images with only one object
+                    continue
+
+                if len(bbs) > GUESSWHAT_MAX_NUM_OBJECTS:
+                    bbs = bbs[:GUESSWHAT_MAX_NUM_OBJECTS]
+
+                img = PIL_Image.open(sample.filepath)
                 if img.mode != "RGB":
                     img = img.convert("RGB")
 
                 cropped_objects = []
-                for detection in sample.ground_truth.detections:
-                    bb = detection.bounding_box
-
+                for bb in bbs:
                     # crop image
                     cropped = img.crop(
                         (
@@ -120,17 +136,7 @@ if __name__ == '__main__':
                             bb[3] * img.height + bb[1] * img.height,
                         )
                     )
-
-                    area_ppx = (bb[2] * img.width) * (bb[3] * img.height)
-                    if area_ppx > args.min_area_in_pixels:
-                        cropped_objects.append(cropped)
-
-                if len(cropped_objects) < 2:
-                    # Do not consider images with only one object
-                    continue
-
-                if len(cropped_objects) > GUESSWHAT_MAX_NUM_OBJECTS:
-                    cropped_objects = cropped_objects[:GUESSWHAT_MAX_NUM_OBJECTS]
+                    cropped_objects.append(cropped)
 
                 # The first image in the tensor is the overview, all following are the cropped objects
                 images = [img] + cropped_objects
@@ -156,7 +162,3 @@ if __name__ == '__main__':
 
                 h5_features[:] = feats
 
-                ids.append(sample.id)
-
-            h5_ids = h5_db.create_dataset(H5_IDS_KEY, len(ids), dtype=string_dtype())
-            h5_ids[:] = ids
