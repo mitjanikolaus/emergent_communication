@@ -725,6 +725,10 @@ class SignalingGameModule(pl.LightningModule):
         rewards = (receiver_output.argmax(dim=1) == labels).detach().float()
 
         receiver_output_loss = F.cross_entropy(receiver_output, labels)
+        if torch.isnan(receiver_output_loss):
+            print("\n\n\n\nloss is nan!!")
+            print(receiver_output)
+            print(labels)
 
         receiver_loss = receiver_output_loss
 
