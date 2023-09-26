@@ -398,6 +398,13 @@ class Sender(pl.LightningModule):
             input_rnn = h_t
 
         step_probs = F.softmax(self.hidden_to_output(h_t), dim=1)
+        if torch.any(torch.isnan(step_probs)):
+            print("\n\n\nNA!")
+            print("step_probs", step_probs)
+            print("input_objects", input_objects)
+            print("prev_msg_embedding", prev_msg_embedding)
+            print("prev_hidden", prev_hidden)
+            print("embedded_receiver_message", embedded_receiver_message)
         distr = Categorical(probs=step_probs)
 
         if self.training:
