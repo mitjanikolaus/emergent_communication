@@ -405,6 +405,16 @@ class Sender(pl.LightningModule):
             print("prev_msg_embedding", prev_msg_embedding)
             print("prev_hidden", prev_hidden)
             print("embedded_receiver_message", embedded_receiver_message)
+        if torch.any(torch.isnan(self.linear_in_objects.weight)):
+            print("linear_in_objects", self.linear_in_objects.weight)
+        if torch.any(torch.isnan(self.linear_in_objects.bias)):
+            print("linear_in_objects bias", self.linear_in_objects.bias)
+        if torch.any(torch.isnan(self.sos_embedding)):
+            print("sos_embedding", self.sos_embedding)
+        if torch.any(torch.isnan(self.sos_embedding_perc)):
+            print("sos_embedding_perc", self.sos_embedding_perc)
+        if torch.any(torch.isnan(input_objects)):
+            print("input_objects", self.input_objects)
         distr = Categorical(probs=step_probs)
 
         if self.training:
