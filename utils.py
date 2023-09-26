@@ -5,8 +5,6 @@ import os
 DATA_DIR_GUESSWHAT = os.path.expanduser("~/data/guesswhat/")
 DATA_DIR_IMAGENET = os.path.expanduser("~/data/imagenet/")
 
-H5_IDS_KEY = "ids"
-
 GUESSWHAT_MAX_NUM_OBJECTS = 10
 RESNET_IMG_FEATS_DIM = 2048
 ViT_IMG_FEATS_DIM = 768
