@@ -487,6 +487,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--hard-distractors", default=False, action="store_true")
 
         parser.add_argument("--initial-lr", type=float, default=1e-3)
+        parser.add_argument("--grad-clip", type=float, default=1)
 
         parser.add_argument("--guesswhat", default=False, action="store_true")
         parser.add_argument("--imagenet", default=False, action="store_true")
@@ -633,6 +634,7 @@ class SignalingGameModule(pl.LightningModule):
         opt_receiver.zero_grad()
         loss, acc = self.forward(batch, sender_idx, receiver_idx)
         self.manual_backward(loss)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), self.params.grad_clip)
 
         perform_sender_update = torch.rand(1) < self.params.sender_learning_speed
         if perform_sender_update and opt_sender:
