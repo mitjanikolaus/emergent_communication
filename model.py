@@ -876,8 +876,11 @@ class SignalingGameModule(pl.LightningModule):
 
         meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _, _ in language_analysis_results])
         messages_sender = torch.cat([message_sender.cpu() for _, message_sender, _, _ in language_analysis_results])
-        messages_receiver = torch.cat([message_receiver.cpu() for _, _, message_receiver, _ in language_analysis_results])
 
+        if self.params.feedback:
+            messages_receiver = torch.cat([message_receiver.cpu() for _, _, message_receiver, _ in language_analysis_results])
+        else:
+            messages_receiver = None
 
         self.analyze_language(messages_sender, messages_receiver, meanings, is_best_checkpoint)
 
