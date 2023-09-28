@@ -115,7 +115,8 @@ class Attention(nn.Module):
 class Receiver(nn.Module):
     def __init__(
             self, vocab_size, embed_dim, hidden_size, max_len, input_size, layer_norm, num_layers,
-            feedback, vocab_size_feedback, object_attention, output_attention, attn_method, noise=False
+            feedback, vocab_size_feedback, object_attention, output_attention, attn_method, noise=False,
+            ignore_candidates_for_feedback=False,
     ):
         super(Receiver, self).__init__()
 
@@ -177,6 +178,8 @@ class Receiver(nn.Module):
 
         self.hidden_to_feedback_output = nn.Linear(hidden_size, vocab_size_feedback)
 
+        self.ignore_candidates_for_feedback = ignore_candidates_for_feedback
+
     def reset_parameters(self):
         for layer in self.children():
             if hasattr(layer, 'reset_parameters'):
@@ -188,7 +191,10 @@ class Receiver(nn.Module):
     def forward_first_turn(self, candidate_objects, sender_messages=None):
         batch_size = candidate_objects.shape[0]
 
-        embedded_objects = self.linear_objects_in(candidate_objects)
+        if self.ignore_candidates_for_feedback:
+            embedded_objects = self.linear_objects_in(torch.zeros_like(candidate_objects))
+        else:
+            embedded_objects = self.linear_objects_in(candidate_objects)
         embedded_objects_avg = torch.mean(embedded_objects, dim=1)
         prev_hidden = [embedded_objects_avg]
         prev_hidden.extend(
@@ -517,6 +523,7 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--receiver-object-attention", default=False, action="store_true")
         parser.add_argument("--receiver-attn-method", default="general", type=str)
         parser.add_argument("--receiver-aux-loss", default=False, action="store_true")
+        parser.add_argument("--receiver-ignore-candidates-for-feedback", default=False, action="store_true")
 
         parser.add_argument("--reset-parameters", default=False, action="store_true")
         parser.add_argument("--update-masks", default=False, action="store_true")
@@ -558,7 +565,8 @@ class SignalingGameModule(pl.LightningModule):
                              self.params.feedback, self.params.vocab_size_feedback,
                              self.params.receiver_object_attention,
                              self.params.receiver_output_attention,
-                             self.params.receiver_attn_method, noise)
+                             self.params.receiver_attn_method, noise,
+                             self.params.receiver_ignore_candidates_for_feedback)
                     for _ in range(self.params.num_receivers)
                 ]
             )
