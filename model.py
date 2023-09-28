@@ -398,23 +398,6 @@ class Sender(pl.LightningModule):
             input_rnn = h_t
 
         step_probs = F.softmax(self.hidden_to_output(h_t), dim=1)
-        if torch.any(torch.isnan(step_probs)):
-            print("\n\n\nNA!")
-            print("step_probs", step_probs)
-            print("input_objects", input_objects)
-            print("prev_msg_embedding", prev_msg_embedding)
-            print("prev_hidden", prev_hidden)
-            print("embedded_receiver_message", embedded_receiver_message)
-        if torch.any(torch.isnan(self.linear_in_objects.weight)):
-            print("linear_in_objects", self.linear_in_objects.weight)
-        if torch.any(torch.isnan(self.linear_in_objects.bias)):
-            print("linear_in_objects bias", self.linear_in_objects.bias)
-        if torch.any(torch.isnan(self.sos_embedding)):
-            print("sos_embedding", self.sos_embedding)
-        if torch.any(torch.isnan(self.sos_embedding_perc)):
-            print("sos_embedding_perc", self.sos_embedding_perc)
-        if torch.any(torch.isnan(input_objects)):
-            print("input_objects", self.input_objects)
         distr = Categorical(probs=step_probs)
 
         if self.training:
@@ -727,10 +710,6 @@ class SignalingGameModule(pl.LightningModule):
         rewards = (receiver_output.argmax(dim=1) == labels).detach().float()
 
         receiver_output_loss = F.cross_entropy(receiver_output, labels)
-        if torch.isnan(receiver_output_loss):
-            print("\n\n\n\nloss is nan!!")
-            print(receiver_output)
-            print(labels)
 
         receiver_loss = receiver_output_loss
 
