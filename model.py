@@ -690,6 +690,7 @@ class SignalingGameModule(pl.LightningModule):
                 receiver_all_logits.append(receiver_out_logits)
 
         messages_sender = torch.stack(messages_sender).permute(1, 0)
+        messages_receiver = torch.stack(messages_receiver).permute(1, 0)
         sender_logits = torch.stack(sender_logits).permute(1, 0)
         sender_entropies = torch.stack(sender_entropies).permute(1, 0)
         receiver_hidden_states = torch.stack(receiver_hidden_states).permute(1, 0, 2)
@@ -756,7 +757,7 @@ class SignalingGameModule(pl.LightningModule):
             self.baselines["reward"].update(rewards)
 
         if return_messages:
-            return loss, rewards, messages_sender
+            return loss, rewards, messages_sender, messages_receiver
         else:
             return loss, rewards
 
@@ -837,9 +838,9 @@ class SignalingGameModule(pl.LightningModule):
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
             # TODO: do only if required for logging
-            _, acc_no_noise, messages = self.forward(batch, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
+            _, acc_no_noise, messages_sender, messages_receiver = self.forward(batch, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
 
-            return batch, messages, acc_no_noise
+            return batch, messages_sender, messages_receiver, acc_no_noise
 
         elif dataloader_idx == 2:
             # Test Generalization
@@ -867,14 +868,17 @@ class SignalingGameModule(pl.LightningModule):
 
         # Language analysis (on train set data)
         language_analysis_results = validation_step_outputs[1]
-        train_acc_no_noise = torch.cat([acc for _, _, acc in language_analysis_results])
+        train_acc_no_noise = torch.cat([acc for _, _, _, acc in language_analysis_results])
         self.log("train_acc_no_noise", train_acc_no_noise.float().mean(), add_dataloader_idx=False)
         if is_best_checkpoint:
             self.log("train_acc_no_noise_at_best_val_acc", train_acc_no_noise.float().mean())
 
-        meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _ in language_analysis_results])
-        messages = torch.cat([message.cpu() for _, message, _ in language_analysis_results])
-        self.analyze_language(messages, meanings, is_best_checkpoint)
+        meanings = torch.cat([meaning.cpu() for (meaning, _, _), _, _, _ in language_analysis_results])
+        messages_sender = torch.cat([message_sender.cpu() for _, message_sender, _, _ in language_analysis_results])
+        messages_receiver = torch.cat([message_receiver.cpu() for _, _, message_receiver, _ in language_analysis_results])
+
+
+        self.analyze_language(messages_sender, messages_receiver, meanings, is_best_checkpoint)
 
         if len(validation_step_outputs) > 2:
             # Test Generalization:
@@ -889,16 +893,23 @@ class SignalingGameModule(pl.LightningModule):
         metrics = {n: v.cpu().item() for n, v in self.trainer.logged_metrics.items()}
         pickle.dump(metrics, open(path, "wb"))
 
-    def analyze_language(self, messages, meanings, is_best_checkpoint=False):
+    def analyze_language(self, messages, messages_receiver, meanings, is_best_checkpoint=False):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
         # TODO msgs depend on feedback!
         unique_meanings, indices = torch.unique(meanings, dim=0, return_inverse=True)
         unique_meanings = unique_meanings[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
-        unique_messages = []
-        for i in range(len(unique_meanings)):
-            unique_messages.append(messages[indices == i][0])
+        unique_messages = [messages[indices == i][0] for i in range(len(unique_meanings))]
+
+        if self.params.feedback:
+            messages_sender_receiver = torch.stack((messages, messages_receiver), dim=2).view(messages.shape[0], -1)
+            # last receiver msg is not having any effect, so we can discard it:
+            messages_sender_receiver = messages_sender_receiver[:, :-1]
+
+            messages_sender_receiver = [messages_sender_receiver[indices == i][0] for i in range(len(unique_meanings))]
+            messages_sender_receiver = torch.stack(messages_sender_receiver)
+
         messages = torch.stack(unique_messages)
         meanings = unique_meanings
         # TODO: command line arg:
@@ -930,15 +941,18 @@ class SignalingGameModule(pl.LightningModule):
             if is_best_checkpoint:
                 self.log("message_entropy_at_best_val_acc", entropy)
 
-        if self.guesswhat or self.imagenet:
-            print("Skipping compositionality metrics calculation.")
-        else:
+        if not (self.guesswhat or self.imagenet):
             if self.params.log_topsim_on_validation or self.force_log:
                 topsim = compute_topsim(meanings, messages)
                 self.log("topsim", topsim, prog_bar=True)
                 print("Topsim: ", topsim)
                 if is_best_checkpoint:
                     self.log("topsim_at_best_val_acc", topsim)
+
+                if self.params.feedback:
+                    topsim_sender_receiver = compute_topsim(meanings, messages_sender_receiver)
+                    self.log("topsim_sender_receiver", topsim_sender_receiver)
+                    print("Topsim_sender_receiver: ", topsim_sender_receiver)
 
             if self.params.log_posdis_on_validation or self.force_log:
                 posdis = compute_posdis(self.num_attributes, self.num_values, meanings, messages)
@@ -947,12 +961,23 @@ class SignalingGameModule(pl.LightningModule):
                 if is_best_checkpoint:
                     self.log("posdis_at_best_val_acc", posdis)
 
+                if self.params.feedback:
+                    posdis_sender_receiver = compute_posdis(self.num_attributes, self.num_values, meanings, messages_sender_receiver)
+                    self.log("posdis_sender_receiver", posdis_sender_receiver, prog_bar=True)
+                    print("posdis_sender_receiver: ", posdis_sender_receiver)
+
             if self.params.log_bosdis_on_validation or self.force_log:
                 bosdis = compute_bosdis(self.num_attributes, self.num_values, meanings, messages, self.params["vocab_size"])
                 self.log("bosdis", bosdis, prog_bar=True)
                 print("bodis: ", bosdis)
                 if is_best_checkpoint:
                     self.log("bosdis_at_best_val_acc", bosdis)
+
+                if self.params.feedback:
+                    bosdis_sender_receiver = compute_bosdis(self.num_attributes, self.num_values, meanings, messages_sender_receiver,
+                                            self.params["vocab_size"])
+                    self.log("bosdis_sender_receiver", bosdis_sender_receiver, prog_bar=True)
+                    print("bosdis_sender_receiver: ", bosdis_sender_receiver)
 
     def on_fit_start(self):
         # Set which metrics to use for hyperparameter tuning
