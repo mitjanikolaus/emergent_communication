@@ -690,7 +690,6 @@ class SignalingGameModule(pl.LightningModule):
                 receiver_all_logits.append(receiver_out_logits)
 
         messages_sender = torch.stack(messages_sender).permute(1, 0)
-        messages_receiver = torch.stack(messages_receiver).permute(1, 0)
         sender_logits = torch.stack(sender_logits).permute(1, 0)
         sender_entropies = torch.stack(sender_entropies).permute(1, 0)
         receiver_hidden_states = torch.stack(receiver_hidden_states).permute(1, 0, 2)
@@ -699,6 +698,8 @@ class SignalingGameModule(pl.LightningModule):
             receiver_all_logits = receiver_all_logits.reshape(-1, receiver_all_logits.shape[-1])
 
         if self.params.feedback:
+            messages_receiver = torch.stack(messages_receiver).permute(1, 0)
+
             receiver_logits = torch.stack(receiver_logits).permute(1, 0)
             receiver_entropies = torch.stack(receiver_entropies).permute(1, 0)
 
