@@ -879,6 +879,17 @@ class SignalingGameModule(pl.LightningModule):
             avg_receiver_msg_after_no_noise = [torch.mean(messages_receiver_noise[messages_sender_noise[:, i] != self.token_noise].to(float)).cpu().item() for i in range(messages_sender_noise.shape[1])]
             print(f"avg_receiver_msg_after_other_token: {avg_receiver_msg_after_no_noise}")
 
+            avg_receiver_msg_after_0 = [torch.mean(
+                messages_receiver_noise[messages_sender_noise[:, i] == 0].to(float)).cpu().item() for i
+                                            in range(messages_sender_noise.shape[1])]
+            print(f"avg_receiver_msg_after_0: {avg_receiver_msg_after_0}")
+
+            avg_receiver_msg_after_1 = [torch.mean(
+                messages_receiver_noise[messages_sender_noise[:, i] == 1].to(float)).cpu().item() for i
+                                               in range(messages_sender_noise.shape[1])]
+            print(f"avg_receiver_msg_after_1: {avg_receiver_msg_after_1}")
+
+
         val_acc = accs.float().mean().item()
         val_acc_no_noise = accs_no_noise.float().mean().item()
         self.log("val_acc", val_acc, prog_bar=True, add_dataloader_idx=False)
