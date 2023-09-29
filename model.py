@@ -836,13 +836,13 @@ class SignalingGameModule(pl.LightningModule):
         receiver_idx = self.val_epoch_receiver_idx
         if dataloader_idx == 0:
             # Val Generalization
-            _, acc = self.forward(batch, sender_idx, receiver_idx)
+            _, acc, messages_sender_noise, messages_receiver_noise = self.forward(batch, sender_idx, receiver_idx, return_messages=True)
             if self.params.noise > 0:
                 _, acc_no_noise = self.forward(batch, sender_idx, receiver_idx, disable_noise=True)
             else:
                 acc_no_noise = acc
 
-            return acc, acc_no_noise
+            return acc, acc_no_noise, messages_sender_noise, messages_receiver_noise
 
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
@@ -863,8 +863,23 @@ class SignalingGameModule(pl.LightningModule):
 
     def validation_epoch_end(self, validation_step_outputs):
         # Val Generalization:
-        accs = torch.cat([acc for acc, _ in validation_step_outputs[0]])
-        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise in validation_step_outputs[0]])
+        accs = torch.cat([acc for acc, _, _, _ in validation_step_outputs[0]])
+        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise, _, _ in validation_step_outputs[0]])
+        if self.params.feedback:
+            messages_sender_noise = torch.cat(
+                [message_sender.cpu() for _, _, message_sender, _ in validation_step_outputs[0]])
+            messages_receiver_noise = torch.cat([message_receiver.cpu() for _, _, _, message_receiver in validation_step_outputs[0]])
+            # last receiver msg is not having any effect, so we can discard it:
+            messages_sender_noise = messages_sender_noise[:, :-1]
+            messages_receiver_noise = messages_receiver_noise[:, :-1]
+
+            avg_receiver_msg_after_noise = torch.mean(messages_receiver_noise[messages_sender_noise == self.token_noise].to(float))
+            self.log("avg_receiver_msg_after_noise", avg_receiver_msg_after_noise, add_dataloader_idx=False)
+
+            avg_receiver_msg_after_no_noise = torch.mean(
+                messages_receiver_noise[messages_sender_noise != self.token_noise].to(float))
+            self.log("avg_receiver_msg_after_no_noise", avg_receiver_msg_after_no_noise, add_dataloader_idx=False)
+
         val_acc = accs.float().mean().item()
         val_acc_no_noise = accs_no_noise.float().mean().item()
         self.log("val_acc", val_acc, prog_bar=True, add_dataloader_idx=False)
