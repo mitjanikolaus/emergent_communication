@@ -78,7 +78,7 @@ def get_args():
     parser.add_argument("--val-set-size", type=float, default=0.1)
     parser.add_argument("--test-set-size", type=float, default=0.0)
     parser.add_argument("--num-workers", type=int, default="0")
-    parser.add_argument("--patience", type=int, default=50)
+    parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--stopping-threshold", type=float, default=0.99)
 
     return parser.parse_args()
