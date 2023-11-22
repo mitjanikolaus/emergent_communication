@@ -14,7 +14,8 @@ from torch.nn import ModuleList, GRUCell
 import pandas as pd
 import seaborn as sns
 from sklearn.metrics import matthews_corrcoef
-from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
+from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis, \
+    compute_variability_metrics
 from utils import ViT_IMG_FEATS_DIM
 from utils import MeanBaseline, NoBaseline
 
@@ -994,6 +995,16 @@ class SignalingGameModule(pl.LightningModule):
         # messages_df.rename(columns={0: 'meaning', 1: 'message', 2: 'candidate 0', 3: 'candidate 1'}, inplace=True)
         # messages_df.sort_values(by="message", inplace=True)
         # messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
+
+        # synonymy = compute_synonymy(meanings, messages)
+        batch_size = meanings.shape[0]
+        meanings_transformed = meanings.view(batch_size, self.num_attributes, self.num_values).argmax(dim=-1)
+        syn, hom, free, ent = compute_variability_metrics(meanings_transformed, messages, self.num_attributes, self.num_values, self.params["max_len"], self.params["vocab_size"])
+        self.log("synonymy: ", syn)
+        self.log("homonymy: ", hom)
+        self.log("freedom: ", free)
+        self.log("entanglement: ", ent)
+
 
         if self.params.log_entropy_on_validation or self.force_log:
             entropy = compute_entropy(messages)
