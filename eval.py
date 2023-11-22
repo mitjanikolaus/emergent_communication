@@ -8,6 +8,7 @@ from pytorch_lightning import seed_everything
 from data import SignalingGameDataModule
 from model import SignalingGameModule
 
+
 def find_best_checkpoint(run_folder, metric="val_acc"):
     checkpoints_folder = os.path.join(run_folder, "checkpoints")
 
@@ -31,13 +32,15 @@ def run(args):
     datamodule = SignalingGameDataModule(num_attributes=config.num_attributes,
                                          num_values=config.num_values,
                                          max_num_objects=config.max_num_objects,
+                                         val_set_size=config.val_set_size,
                                          test_set_size=config.test_set_size,
                                          batch_size=config.batch_size,
                                          num_workers=config.num_workers,
                                          seed=config.seed,
-                                         discrimination_game=config.discrimination_game,
                                          num_objects=config.discrimination_num_objects,
-                                         hard_distractors=args.hard_distractors)
+                                         hard_distractors=config.hard_distractors,
+                                         guesswhat=config.guesswhat,
+                                         imagenet=config.imagenet,)
 
     if torch.cuda.is_available():
         config["gpus"] = 1
@@ -52,7 +55,6 @@ def run(args):
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=str, required=True)
-    parser.add_argument("--hard-distractors", default=False, action="store_true")
 
     return parser.parse_args()
 

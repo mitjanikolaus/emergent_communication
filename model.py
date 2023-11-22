@@ -11,11 +11,14 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 import pytorch_lightning as pl
 from torch.nn import ModuleList, GRUCell
-
+import pandas as pd
+import seaborn as sns
+from sklearn.metrics import matthews_corrcoef
 from language_analysis import compute_topsim, compute_entropy, compute_posdis, compute_bosdis
 from utils import ViT_IMG_FEATS_DIM
 from utils import MeanBaseline, NoBaseline
 
+import matplotlib.pyplot as plt
 
 MAX_SAMPLES_LANGUAGE_ANALYSIS = 1000
 
@@ -842,7 +845,7 @@ class SignalingGameModule(pl.LightningModule):
             else:
                 acc_no_noise = acc
 
-            return acc, acc_no_noise, messages_sender_noise, messages_receiver_noise
+            return acc, acc_no_noise, messages_sender_noise, messages_receiver_noise, batch
 
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
@@ -863,32 +866,15 @@ class SignalingGameModule(pl.LightningModule):
 
     def validation_epoch_end(self, validation_step_outputs):
         # Val Generalization:
-        accs = torch.cat([acc for acc, _, _, _ in validation_step_outputs[0]])
-        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise, _, _ in validation_step_outputs[0]])
+        accs = torch.cat([acc for acc, _, _, _, _ in validation_step_outputs[0]])
+        accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise, _, _, _ in validation_step_outputs[0]])
         if self.params.feedback:
             messages_sender_noise = torch.cat(
-                [message_sender.cpu() for _, _, message_sender, _ in validation_step_outputs[0]])
-            messages_receiver_noise = torch.cat([message_receiver.cpu() for _, _, _, message_receiver in validation_step_outputs[0]])
-            # last receiver msg is not having any effect, so we can discard it:
-            messages_sender_noise = messages_sender_noise[:, :-1]
-            messages_receiver_noise = messages_receiver_noise[:, :-1]
-
-            avg_receiver_msg_after_noise = [torch.mean(messages_receiver_noise[messages_sender_noise[:, i] == self.token_noise].to(float)).cpu().item() for i in range(messages_sender_noise.shape[1])]
-            print(f"avg_receiver_msg_after_noise: {avg_receiver_msg_after_noise}")
-
-            avg_receiver_msg_after_no_noise = [torch.mean(messages_receiver_noise[messages_sender_noise[:, i] != self.token_noise].to(float)).cpu().item() for i in range(messages_sender_noise.shape[1])]
-            print(f"avg_receiver_msg_after_other_token: {avg_receiver_msg_after_no_noise}")
-
-            avg_receiver_msg_after_0 = [torch.mean(
-                messages_receiver_noise[messages_sender_noise[:, i] == 0].to(float)).cpu().item() for i
-                                            in range(messages_sender_noise.shape[1])]
-            print(f"avg_receiver_msg_after_0: {avg_receiver_msg_after_0}")
-
-            avg_receiver_msg_after_1 = [torch.mean(
-                messages_receiver_noise[messages_sender_noise[:, i] == 1].to(float)).cpu().item() for i
-                                               in range(messages_sender_noise.shape[1])]
-            print(f"avg_receiver_msg_after_1: {avg_receiver_msg_after_1}")
-
+                [message_sender.cpu() for _, _, message_sender, _, _ in validation_step_outputs[0]])
+            messages_receiver_noise = torch.cat([message_receiver.cpu() for _, _, _, message_receiver, _ in validation_step_outputs[0]])
+            batches = [batch for _, _, _, _, batch in validation_step_outputs[0]]
+            receiver_input = [ri.cpu() for _, ri, _ in batches]
+            self.analyze_noisy_language(receiver_input, messages_sender_noise, messages_receiver_noise)
 
         val_acc = accs.float().mean().item()
         val_acc_no_noise = accs_no_noise.float().mean().item()
@@ -917,6 +903,8 @@ class SignalingGameModule(pl.LightningModule):
 
         self.analyze_language(messages_sender, messages_receiver, meanings, is_best_checkpoint)
 
+        self.analyze_noisy_language(None, messages_sender, messages_receiver)
+
         if len(validation_step_outputs) > 2:
             # Test Generalization:
             accs = torch.cat([acc for acc, _ in validation_step_outputs[2]])
@@ -929,6 +917,42 @@ class SignalingGameModule(pl.LightningModule):
         path = os.path.join(self.logger.log_dir, "results.pickle")
         metrics = {n: v.cpu().item() for n, v in self.trainer.logged_metrics.items()}
         pickle.dump(metrics, open(path, "wb"))
+
+    def analyze_noisy_language(self, receiver_input, messages_sender, messages_receiver):
+        if receiver_input is not None:
+            receiver_input = torch.cat(receiver_input)
+
+            data = []
+            data.append([])
+            for i in range(messages_receiver.shape[1]):
+                for j in range(messages_sender.shape[1]):
+                    mcc = matthews_corrcoef((messages_sender[:, j] == self.token_noise).to(torch.float), messages_receiver[:, i])
+                    data[0].append({"receiver_message": i, "sender_message_is_noise": j, "mcc": mcc})
+            data[0] = pd.DataFrame.from_records(data[0]).pivot("receiver_message", "sender_message_is_noise", "mcc")
+
+            data.append([])
+            for i in range(messages_receiver.shape[1]):
+                for j in range(messages_sender.shape[1]):
+                    mcc = matthews_corrcoef(messages_sender[:,j][messages_sender[:, j] != self.token_noise], messages_receiver[:, i][messages_sender[:, j] != self.token_noise])
+                    data[1].append({"receiver_message": i, "sender_message": j, "mcc": mcc})
+            data[1] = pd.DataFrame.from_records(data[1]).pivot("receiver_message", "sender_message", "mcc")
+
+            for k in range(receiver_input.shape[1]):
+                data.append([])
+                for i in range(messages_receiver.shape[1]):
+                    for j in range(receiver_input.shape[2]):
+                        mcc = matthews_corrcoef((receiver_input[:, k, j]), (messages_receiver[:, i]))
+                        data[k + 2].append({"receiver_message": i, f"input_object_{k}": j, "mcc": mcc})
+                data[k + 2] = pd.DataFrame.from_records(data[k + 2]).pivot("receiver_message", f"input_object_{k}", "mcc")
+
+            fig, axes = plt.subplots(1, 4, sharey="all", figsize=(15, 4))
+            for k in range(len(axes)):
+                sns.heatmap(data[k], ax=axes[k], vmin=-1, vmax=1, cbar=True if k == len(axes) - 1 else False)
+                if not k == 0:
+                    axes[k].set(ylabel="")
+
+            plt.tight_layout()
+            plt.savefig("plots/heat.pdf", dpi=300)
 
     def analyze_language(self, messages, messages_receiver, meanings, is_best_checkpoint=False):
         num_unique_messages = len(messages.unique(dim=0))
