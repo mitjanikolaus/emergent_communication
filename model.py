@@ -423,7 +423,7 @@ class Sender(pl.LightningModule):
 class SignalingGameModule(pl.LightningModule):
     def __init__(self, symmetric=False, optimal_sender=False, load_checkpoint=None, baseline_type="mean",
                  max_len=4, num_attributes=4, num_values=4, num_senders=1, num_receivers=1,
-                 receiver_embed_dim=30, receiver_num_layers=500, receiver_hidden_dim=500,
+                 receiver_embed_dim=30, receiver_num_layers=1, receiver_hidden_dim=500,
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
                  receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
                  sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
@@ -943,15 +943,20 @@ class SignalingGameModule(pl.LightningModule):
                     for j in range(receiver_input.shape[2]):
                         mcc = matthews_corrcoef((receiver_input[:, k, j]), (messages_receiver[:, i]))
                         data[k + 2].append({"receiver_message": i, f"input_object_{k}": j, "mcc": mcc})
-                data[k + 2] = pd.DataFrame.from_records(data[k + 2]).pivot("receiver_message", f"input_object_{k}", "mcc")
+                df = pd.DataFrame.from_records(data[k + 2])
+                df['receiver_message'] = df['receiver_message'].astype('category')
+                df[f'input_object_{k}'] = df[f'input_object_{k}'].astype('category')
 
-            fig, axes = plt.subplots(1, 4, sharey="all", figsize=(15, 4))
+                data[k + 2] = df.pivot("receiver_message", f"input_object_{k}", "mcc")
+
+            fig, axes = plt.subplots(1, 4, sharey="all", figsize=(15, 4), gridspec_kw={'width_ratios': [1, 1, 1, 1.25]})
             for k in range(len(axes)):
-                sns.heatmap(data[k], ax=axes[k], vmin=-1, vmax=1, cbar=True if k == len(axes) - 1 else False)
+                sns.heatmap(data[k], ax=axes[k], vmin=-1, vmax=1, center=0, cmap="PiYG", cbar=True if k == len(axes) - 1 else False)
                 if not k == 0:
                     axes[k].set(ylabel="")
 
             plt.tight_layout()
+            os.makedirs("plots", exist_ok=True)
             plt.savefig("plots/heat.pdf", dpi=300)
 
     def analyze_language(self, messages, messages_receiver, meanings, is_best_checkpoint=False):
