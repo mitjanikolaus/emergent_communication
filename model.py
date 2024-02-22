@@ -421,7 +421,7 @@ class Sender(pl.LightningModule):
 
 
 class SignalingGameModule(pl.LightningModule):
-    def __init__(self, symmetric=False, optimal_sender=False, load_checkpoint=None, baseline_type="mean",
+    def __init__(self, load_checkpoint=None, baseline_type="mean",
                  max_len=4, num_attributes=4, num_values=4, num_senders=1, num_receivers=1,
                  receiver_embed_dim=30, receiver_num_layers=1, receiver_hidden_dim=500,
                  receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
@@ -484,8 +484,6 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--guesswhat", default=False, action="store_true")
         parser.add_argument("--imagenet", default=False, action="store_true")
 
-        parser.add_argument("--symmetric", default=False, action="store_true")
-        parser.add_argument("--optimal-sender", default=False, action="store_true")
         parser.add_argument("--load-checkpoint", type=str, default=None)
         parser.add_argument("--baseline-type", type=str, default="mean")
 
@@ -537,42 +535,36 @@ class SignalingGameModule(pl.LightningModule):
         return parent_parser
 
     def init_agents(self):
-        if self.params.symmetric:
-            raise NotImplementedError()
-        else:
-            if self.params.optimal_sender:
-                raise NotImplementedError()
-            else:
-                self.senders = ModuleList(
-                    [
-                        Sender(
-                               self.input_size,
-                               self.params.vocab_size, self.params.sender_embed_dim,
-                               self.params.sender_hidden_dim, self.params.max_len,
-                               self.params.sender_layer_norm, self.params.sender_num_layers,
-                               self.params.feedback, self.params.vocab_size_feedback,
-                               self.params.sender_attention, self.params.sender_attn_method)
-                        for _ in range(self.params.num_senders)
-                    ]
-                )
+        self.senders = ModuleList(
+            [
+                Sender(
+                       self.input_size,
+                       self.params.vocab_size, self.params.sender_embed_dim,
+                       self.params.sender_hidden_dim, self.params.max_len,
+                       self.params.sender_layer_norm, self.params.sender_num_layers,
+                       self.params.feedback, self.params.vocab_size_feedback,
+                       self.params.sender_attention, self.params.sender_attn_method)
+                for _ in range(self.params.num_senders)
+            ]
+        )
 
-            noise = False
-            if self.params.noise > 0:
-                noise = True
-            self.receivers = ModuleList(
-                [
-                    Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
-                             self.params.receiver_hidden_dim, self.params.max_len,
-                             self.input_size,
-                             self.params.receiver_layer_norm, self.params.receiver_num_layers,
-                             self.params.feedback, self.params.vocab_size_feedback,
-                             self.params.receiver_object_attention,
-                             self.params.receiver_output_attention,
-                             self.params.receiver_attn_method, noise,
-                             self.params.receiver_ignore_candidates_for_feedback)
-                    for _ in range(self.params.num_receivers)
-                ]
-            )
+        noise = False
+        if self.params.noise > 0:
+            noise = True
+        self.receivers = ModuleList(
+            [
+                Receiver(self.params.vocab_size, self.params.receiver_embed_dim,
+                         self.params.receiver_hidden_dim, self.params.max_len,
+                         self.input_size,
+                         self.params.receiver_layer_norm, self.params.receiver_num_layers,
+                         self.params.feedback, self.params.vocab_size_feedback,
+                         self.params.receiver_object_attention,
+                         self.params.receiver_output_attention,
+                         self.params.receiver_attn_method, noise,
+                         self.params.receiver_ignore_candidates_for_feedback)
+                for _ in range(self.params.num_receivers)
+            ]
+        )
 
     def freeze_senders(self):
         for sender in self.senders:
@@ -580,10 +572,7 @@ class SignalingGameModule(pl.LightningModule):
                 param.requires_grad = False
 
     def configure_optimizers(self):
-        if self.params.optimal_sender:
-            optimizers_sender = []
-        else:
-            optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=self.params.initial_lr) for sender in self.senders]
+        optimizers_sender = [torch.optim.Adam(sender.parameters(), lr=self.params.initial_lr) for sender in self.senders]
         optimizers_receiver = [torch.optim.Adam(receiver.parameters(), lr=self.params.initial_lr) for receiver in self.receivers]
 
         return tuple(itertools.chain(optimizers_sender, optimizers_receiver))
@@ -591,47 +580,24 @@ class SignalingGameModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         optimizers = self.optimizers()
 
-        if self.params.symmetric:
-            num_agents = self.params.num_senders + self.params.num_receivers
-            sender_idx = random.choice(range(num_agents))
-            receiver_idx = random.choice(range(num_agents))
-            # Avoid communication within same agent
-            while (sender_idx == receiver_idx):
-                sender_idx = random.choice(range(num_agents))
-                receiver_idx = random.choice(range(num_agents))
+        # Sample sender and receiver for this batch:
+        sender_idx = random.choice(range(self.params.num_senders))
+        receiver_idx = random.choice(range(self.params.num_receivers))
 
-            opt_sender = optimizers[sender_idx]
-            opt_receiver = optimizers[receiver_idx]
+        opts_sender = optimizers[:self.params.num_senders]
+        opts_receiver = optimizers[self.params.num_senders:]
 
-        else:
-            # Sample sender and receiver for this batch:
-            sender_idx = random.choice(range(self.params.num_senders))
-            receiver_idx = random.choice(range(self.params.num_receivers))
+        opt_sender = opts_sender[sender_idx]
+        opt_receiver = opts_receiver[receiver_idx]
 
-            if self.params.optimal_sender:
-                opt_sender = None
-                opts_receiver = optimizers
-                if self.params.num_receivers == 1:
-                    opt_receiver = opts_receiver
-                else:
-                    opt_receiver = opts_receiver[receiver_idx]
-
-            else:
-                opts_sender = optimizers[:self.params.num_senders]
-                opts_receiver = optimizers[self.params.num_senders:]
-
-                opt_sender = opts_sender[sender_idx]
-                opt_receiver = opts_receiver[receiver_idx]
-
-        if opt_sender:
-            opt_sender.zero_grad()
+        opt_sender.zero_grad()
         opt_receiver.zero_grad()
         loss, acc = self.forward(batch, sender_idx, receiver_idx)
         self.manual_backward(loss)
         torch.nn.utils.clip_grad_norm_(self.parameters(), self.params.grad_clip)
 
         perform_sender_update = torch.rand(1) < self.params.sender_learning_speed
-        if perform_sender_update and opt_sender:
+        if perform_sender_update:
             opt_sender.step()
 
         perform_receiver_update = torch.rand(1) < self.params.receiver_learning_speed
@@ -820,17 +786,8 @@ class SignalingGameModule(pl.LightningModule):
 
     def on_validation_epoch_start(self):
         # Sample agent indices for this validation epoch
-        if self.params.symmetric:
-            num_agents = self.params.num_senders + self.params.num_receivers
-            self.val_epoch_sender_idx = random.choice(range(num_agents))
-            self.val_epoch_receiver_idx = random.choice(range(num_agents))
-            # Avoid communication within same agent
-            while (self.val_epoch_sender_idx == self.val_epoch_receiver_idx):
-                self.val_epoch_sender_idx = random.choice(range(num_agents))
-                self.val_epoch_receiver_idx = random.choice(range(num_agents))
-        else:
-            self.val_epoch_sender_idx = random.choice(range(self.params.num_senders))
-            self.val_epoch_receiver_idx = random.choice(range(self.params.num_receivers))
+        self.val_epoch_sender_idx = random.choice(range(self.params.num_senders))
+        self.val_epoch_receiver_idx = random.choice(range(self.params.num_receivers))
 
         print(f"\nValidating for sender {self.val_epoch_sender_idx} and receiver {self.val_epoch_receiver_idx}:")
 
