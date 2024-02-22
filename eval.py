@@ -26,6 +26,7 @@ def run(args):
     print("Loading checkpoint: " + checkpoint_path)
     model = SignalingGameModule.load_from_checkpoint(checkpoint_path)
     config = model.params
+    print(config)
 
     seed_everything(config["seed"], workers=True)
 
