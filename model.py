@@ -906,12 +906,14 @@ class SignalingGameModule(pl.LightningModule):
 
                 data[k + 2] = df.pivot("receiver_message", f"input_object_{k}", "mcc")
 
-            fig, axes = plt.subplots(1, 4, sharey="all", figsize=(15, 4), gridspec_kw={'width_ratios': [1, 1, 1, 1.25]})
+            sns.set_context("paper", font_scale=1.8)
+            sns.set_style("whitegrid")
+            fig, axes = plt.subplots(1, 4, sharey="all", figsize=(18, 5), gridspec_kw={'width_ratios': [1, 1, 1, 1.25]})
             for k in range(len(axes)):
-                sns.heatmap(data[k], ax=axes[k], vmin=-1, vmax=1, center=0, cmap="PiYG", cbar=True if k == len(axes) - 1 else False)
+                sns.heatmap(data[k], ax=axes[k], vmin=-1, vmax=1, center=0, cmap="PiYG",
+                            cbar=True if k == len(axes) - 1 else False)
                 if not k == 0:
                     axes[k].set(ylabel="")
-
             plt.tight_layout()
             os.makedirs("plots", exist_ok=True)
             plt.savefig("plots/heat.pdf", dpi=300)
