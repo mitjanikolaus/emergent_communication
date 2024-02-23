@@ -1,6 +1,6 @@
 # Emergent Communication
 
-This is the repo for the ICLR 2024 paper "Emergent Communication with Conversational Repair" by Mitja Nikolaus.
+This is the repo for the ICLR 2024 paper [Emergent Communication with Conversational Repair](https://openreview.net/pdf?id=Sy8upuD6Bw) by Mitja Nikolaus.
 
 ### Python environment
 
@@ -18,6 +18,13 @@ For setups with noise and feedback channel simply add the corresponding command 
 python train.py --sender-layer-norm --receiver-layer-norm --noise 0.5 --feedback
 ```
 
+### Further configuration options
+
+All config options are displayed when running simply:
+```
+python train.py -h
+```
+
 ## GuessWhat signaling game
 
 For a GuessWhat signaling game, first run the feature extraction script:
@@ -28,13 +35,6 @@ python extract_guesswhat_features.py
 Afterwards a training run can be started:
 ```
 python train.py --guesswhat --sender-layer-norm --receiver-layer-norm
-```
-
-## Further configuration options
-
-All config options are displayed when running simply:
-```
-python train.py -h
 ```
 
 ## Result plotting
