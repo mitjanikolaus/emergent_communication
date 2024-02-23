@@ -115,3 +115,4 @@ lightning_logs*/
 
 # Output files
 *.pickle
+plots
