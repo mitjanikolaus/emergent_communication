@@ -423,11 +423,11 @@ class Sender(pl.LightningModule):
 class SignalingGameModule(pl.LightningModule):
     def __init__(self, load_checkpoint=None, baseline_type="mean",
                  max_len=4, num_attributes=4, num_values=4, num_senders=1, num_receivers=1,
-                 receiver_embed_dim=30, receiver_num_layers=1, receiver_hidden_dim=500,
-                 receiver_learning_speed=1, sender_embed_dim=5, sender_entropy_coeff=0.5,
-                 receiver_entropy_coeff=0.5, sender_num_layers=1, receiver_layer_norm=False,
-                 sender_layer_norm=False, sender_hidden_dim=500, sender_learning_speed=1,
-                 vocab_size=5, noise=0, noise_permutation=False, feedback=False, vocab_size_feedback=3,
+                 receiver_embed_dim=16, receiver_num_layers=1, receiver_hidden_dim=128,
+                 receiver_learning_speed=1, sender_embed_dim=16, sender_entropy_coeff=0.01,
+                 receiver_entropy_coeff=0.01, sender_num_layers=1, receiver_layer_norm=False,
+                 sender_layer_norm=False, sender_hidden_dim=128, sender_learning_speed=1,
+                 vocab_size=2, noise=0, noise_permutation=False, feedback=False, vocab_size_feedback=2,
                  log_topsim_on_validation=False, log_posdis_on_validation=False,
                  log_bosdis_on_validation=False, log_entropy_on_validation=False,
                  guesswhat=False, imagenet=False, **kwargs):
@@ -504,6 +504,8 @@ class SignalingGameModule(pl.LightningModule):
         parser.add_argument("--log-posdis-on-validation", default=False, action="store_true")
         parser.add_argument("--log-bosdis-on-validation", default=False, action="store_true")
         parser.add_argument("--log-entropy-on-validation", default=False, action="store_true")
+
+        parser.add_argument("--plot-heatmap-on-validation", default=False, action="store_true")
 
         parser.add_argument("--sender-embed-dim", type=int, default=16)
         parser.add_argument("--sender-num-layers", type=int, default=1)
@@ -806,7 +808,6 @@ class SignalingGameModule(pl.LightningModule):
 
         elif dataloader_idx == 1:
             # Language analysis (on train set data)
-            # TODO: do only if required for logging
             _, acc_no_noise, messages_sender, messages_receiver = self.forward(batch, sender_idx, receiver_idx, return_messages=True, disable_noise=True)
 
             return batch, messages_sender, messages_receiver, acc_no_noise
@@ -822,7 +823,6 @@ class SignalingGameModule(pl.LightningModule):
             return acc, acc_no_noise
 
     def validation_epoch_end(self, validation_step_outputs):
-        # Val Generalization:
         accs = torch.cat([acc for acc, _, _, _, _ in validation_step_outputs[0]])
         accs_no_noise = torch.cat([acc_no_noise for _, acc_no_noise, _, _, _ in validation_step_outputs[0]])
         if self.params.feedback:
@@ -831,7 +831,8 @@ class SignalingGameModule(pl.LightningModule):
             messages_receiver_noise = torch.cat([message_receiver.cpu() for _, _, _, message_receiver, _ in validation_step_outputs[0]])
             batches = [batch for _, _, _, _, batch in validation_step_outputs[0]]
             receiver_input = [ri.cpu() for _, ri, _ in batches]
-            self.analyze_noisy_language(receiver_input, messages_sender_noise, messages_receiver_noise)
+            if self.params.plot_heatmap_on_validation:
+                self.analyze_noisy_language(receiver_input, messages_sender_noise, messages_receiver_noise)
 
         val_acc = accs.float().mean().item()
         val_acc_no_noise = accs_no_noise.float().mean().item()
@@ -918,11 +919,32 @@ class SignalingGameModule(pl.LightningModule):
             os.makedirs("plots", exist_ok=True)
             plt.savefig("plots/heat.pdf", dpi=300)
 
+    def save_conversations(self, meanings, messages, candidate_objects):
+        def transform_meaning(meaning):
+            return meaning.reshape(self.num_attributes, self.num_values).argmax(dim=1)
+
+        meanings_transformed = [transform_meaning(m) for m in meanings]
+        meanings_strings = pd.DataFrame(meanings_transformed).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+
+        candidate_objects_0 = candidate_objects[:, 0, :]
+        candidate_objects_1 = candidate_objects[:, 1, :]
+        candidate_objects_0 = [transform_meaning(m) for m in candidate_objects_0]
+        candidate_objects_1 = [transform_meaning(m) for m in candidate_objects_1]
+
+        candidate_objects_0_strings = pd.DataFrame(candidate_objects_0).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+        candidate_objects_1_strings = pd.DataFrame(candidate_objects_1).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
+
+        num_digits = int(math.log10(self.params.vocab_size))
+        messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
+        messages_df = pd.DataFrame([meanings_strings, messages_strings, candidate_objects_0_strings, candidate_objects_1_strings]).T
+        messages_df.rename(columns={0: 'meaning', 1: 'message', 2: 'candidate 0', 3: 'candidate 1'}, inplace=True)
+        messages_df.sort_values(by="message", inplace=True)
+        messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
+
     def analyze_language(self, messages, messages_receiver, meanings, is_best_checkpoint=False):
         num_unique_messages = len(messages.unique(dim=0))
         self.log("num_unique_messages", float(num_unique_messages))
 
-        # TODO msgs depend on feedback!
         unique_meanings, indices = torch.unique(meanings, dim=0, return_inverse=True)
         unique_meanings = unique_meanings[:MAX_SAMPLES_LANGUAGE_ANALYSIS]
         unique_messages = [messages[indices == i][0] for i in range(len(unique_meanings))]
@@ -937,27 +959,6 @@ class SignalingGameModule(pl.LightningModule):
 
         messages = torch.stack(unique_messages)
         meanings = unique_meanings
-        # TODO: command line arg:
-        # def transform_meaning(meaning):
-        #     return meaning.reshape(self.num_attributes, self.num_values).argmax(dim=1)
-        #
-        # meanings_transformed = [transform_meaning(m) for m in meanings]
-        # meanings_strings = pd.DataFrame(meanings_transformed).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
-        #
-        # candidate_objects_0 = candidate_objects[:, 0, :]
-        # candidate_objects_1 = candidate_objects[:, 1, :]
-        # candidate_objects_0 = [transform_meaning(m) for m in candidate_objects_0]
-        # candidate_objects_1 = [transform_meaning(m) for m in candidate_objects_1]
-        #
-        # candidate_objects_0_strings = pd.DataFrame(candidate_objects_0).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
-        # candidate_objects_1_strings = pd.DataFrame(candidate_objects_1).apply(lambda row: "".join(row.astype(int).astype(str)), axis=1)
-        #
-        # num_digits = int(math.log10(self.params.vocab_size))
-        # messages_strings = pd.DataFrame(messages).apply(lambda row: "".join([s.zfill(num_digits) for s in row.astype(int).astype(str)]), axis=1)
-        # messages_df = pd.DataFrame([meanings_strings, messages_strings, candidate_objects_0_strings, candidate_objects_1_strings]).T
-        # messages_df.rename(columns={0: 'meaning', 1: 'message', 2: 'candidate 0', 3: 'candidate 1'}, inplace=True)
-        # messages_df.sort_values(by="message", inplace=True)
-        # messages_df.to_csv(f"{self.logger.log_dir}/messages.csv", index=False)
 
         if self.params.log_entropy_on_validation or self.force_log:
             entropy = compute_entropy(messages)

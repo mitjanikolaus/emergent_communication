@@ -50,6 +50,7 @@ def run(args):
 
     trainer = pl.Trainer.from_argparse_args(config)
 
+    model.params.plot_heatmap_on_validation = True
     trainer.validate(model, datamodule=datamodule, verbose=True)
 
 
