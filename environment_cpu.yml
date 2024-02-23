@@ -183,4 +183,3 @@ dependencies:
   - matplotlib-base=3.5.1
   - h5py
   - torchvision
-prefix: /home/mitja/anaconda3/envs/emergent_communication
