@@ -111,8 +111,9 @@ venv.bak/
 # Output directories
 out/
 data/
-lightning_logs*/
+lightning_logs/
+plots/
 
 # Output files
-*.pickle
-plots
+*.ckpt
+events.out.tfevents.*
