@@ -20,7 +20,7 @@ python train.py --sender-layer-norm --receiver-layer-norm --noise 0.5 --feedback
 
 ### Further configuration options
 
-All config options are displayed when running simply:
+All config options are displayed when running:
 ```
 python train.py -h
 ```
